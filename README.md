@@ -15,6 +15,12 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ---
 
+## Modelo de dados
+
+É o mesmo CRM/ERP de vendas do projeto anterior: `clientes`, `vendedores`, `produtos`, `pedidos`, `itens_pedido` e `pagamentos` (ver [`sql/01_schema.sql`](sql/01_schema.sql)).
+
+Propositalmente, o schema só tem os índices que o PostgreSQL cria sozinho: um por chave primária e o da restrição `UNIQUE` de `vendedores.email`. O PostgreSQL **não** cria índice para chave estrangeira. Cada índice adicional entra como correção dentro de uma investigação, com o plano de execução antes e depois como evidência. A validação falha se aparecer algum índice fora dessa lista.
+
 ## Pré-requisitos
 
 - [Node.js](https://nodejs.org/) 24 ou superior (com npm).
@@ -36,7 +42,7 @@ npm ci
 npm run validate
 ```
 
-O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere apenas que o ambiente está pronto (o banco sobe e a versão é a 16).
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere que a versão é a 16, carrega o schema e verifica as tabelas e os índices.
 
 ### Alternativa: banco com Docker Compose
 
@@ -59,7 +65,8 @@ docker compose down -v
 ├── scripts/
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
 │   └── validate.js            # validação executada localmente e na CI
-└── sql/                       # scripts de schema e dados (próximas etapas)
+└── sql/
+    └── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos
 ```
 
 ---
