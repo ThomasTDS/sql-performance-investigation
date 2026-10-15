@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const EmbeddedPostgres = require('embedded-postgres').default;
 const { Client } = require('pg');
 
@@ -12,20 +13,52 @@ function lerSql(nomeArquivo) {
   return fs.readFileSync(path.join(SQL_DIR, nomeArquivo), 'utf-8');
 }
 
+// No Windows, o initdb grava o caminho da pasta share (arquivos de
+// instalação do Postgres, dentro de node_modules) num comando SQL. Se o
+// projeto estiver numa pasta com acento (ex.: "Programação"), esse caminho
+// chega em WIN1252 e o banco em UTF-8 o rejeita ("invalid byte sequence").
+// Nesse caso, a share é copiada para a pasta temporária do sistema e o
+// initdb a usa de lá (-L). Devolve o caminho da cópia, ou null se não for
+// preciso copiar.
+async function copiarShareSeNecessario() {
+  if (process.platform !== 'win32') return null;
+  const { initdb } = await import('@embedded-postgres/windows-x64');
+  const share = path.join(path.dirname(initdb), '..', 'share');
+  if (/^[\x00-\x7F]*$/.test(share)) return null;
+
+  const copia = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-share-'));
+  // fs.promises.cp, e não fs.cpSync: no Node 24 para Windows, o cpSync
+  // derruba o processo sem mensagem nenhuma ao copiar desta pasta.
+  await fs.promises.cp(share, copia, { recursive: true });
+  return copia;
+}
+
 // Sobe um Postgres limpo na porta e pasta informadas, executa `fn` com um
 // cliente conectado e, no fim (com ou sem erro), derruba o banco e apaga
 // a pasta de dados. `opcoesCliente` é repassado ao Client do pg.
 async function comPostgresEmbarcado({ porta, pasta, opcoesCliente = {} }, fn) {
+  const shareCopia = await copiarShareSeNecessario();
   const pg = new EmbeddedPostgres({
     databaseDir: pasta,
     user: 'postgres',
     password: 'postgres',
     port: porta,
     persistent: false,
+    // Sem isso, o initdb herda a codificação e o locale do sistema
+    // operacional (no Windows em português: WIN1252 e Portuguese_Brazil).
+    // O locale muda planos de execução — com locale diferente de C, um
+    // índice B-tree comum não atende LIKE 'abc%' —, então os três
+    // ambientes (local, Docker e CI) usam UTF-8 com locale C.
+    initdbFlags: ['--encoding=UTF8', '--locale=C', ...(shareCopia ? ['-L', shareCopia] : [])],
   });
 
   console.log('Subindo Postgres (embarcado, sem Docker)...');
-  await pg.initialise();
+  try {
+    await pg.initialise();
+  } finally {
+    // A share só é lida pelo initdb; depois dele, a cópia pode sair.
+    if (shareCopia) fs.rmSync(shareCopia, { recursive: true, force: true });
+  }
   await pg.start();
 
   try {
