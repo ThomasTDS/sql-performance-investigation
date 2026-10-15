@@ -8,14 +8,18 @@
 // 3. Gera o volume de dados e confere que ele é reprodutível (mesma
 //    quantidade de linhas e mesma impressão digital em qualquer máquina) e
 //    correto (nenhuma inconsistência entre as tabelas).
-//
-// As verificações dos planos de execução das investigações entram aqui
-// nas próximas etapas.
+// 4. Para cada investigação, numa transação desfeita no fim (ROLLBACK):
+//    confere como a consulta acessa a tabela investigada antes da correção,
+//    aplica a correção, confere o acesso de novo e confere que o resultado
+//    da consulta não mudou. Tempos não são conferidos: variam de máquina
+//    para máquina e deixariam a CI instável.
 
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
 
+const INVESTIGACOES_DIR = path.join(__dirname, '..', 'investigacoes');
 const PORT = 5433;
 const DATA_DIR = path.join(__dirname, '..', '.pgdata-validate');
 const VERSAO_MAJOR_ESPERADA = 16;
@@ -85,6 +89,44 @@ const COERENCIA = [
     sql: 'SELECT count(*) FROM (SELECT pedido_id FROM pagamentos GROUP BY pedido_id HAVING count(*) > 1) AS x',
   },
 ];
+
+// Cada investigação tem consulta.sql (a consulta lenta) e correcao.sql. O
+// "acesso" é como o plano lê a tabela investigada: o tipo do nó e, se
+// houver, o índice usado (ver descreverAcesso).
+const INVESTIGACOES = [
+  {
+    pasta: '01-fk-sem-indice',
+    tabela: 'itens_pedido',
+    acessoAntes: 'Seq Scan',
+    acessoDepois: 'Index Scan usando idx_itens_pedido_pedido_id',
+  },
+];
+
+function lerInvestigacao(pasta, arquivo) {
+  return fs.readFileSync(path.join(INVESTIGACOES_DIR, pasta, arquivo), 'utf-8');
+}
+
+// Percorre o plano (EXPLAIN FORMAT JSON) e descreve como a tabela é lida,
+// por exemplo "Seq Scan" ou "Index Scan usando idx_x". Um Parallel Seq
+// Scan também é "Seq Scan": o que importa é ler a tabela inteira. Num
+// Bitmap Heap Scan, o índice fica no nó filho (Bitmap Index Scan).
+function descreverAcesso(plano, tabela) {
+  const acessos = [];
+  const visitar = (no) => {
+    if (no['Relation Name'] === tabela) {
+      const indice = no['Index Name'] || (no.Plans || []).map((f) => f['Index Name']).find(Boolean);
+      acessos.push(indice ? `${no['Node Type']} usando ${indice}` : no['Node Type']);
+    }
+    (no.Plans || []).forEach(visitar);
+  };
+  visitar(plano);
+  return acessos.join(' + ') || '(tabela não aparece no plano)';
+}
+
+async function acessoDaConsulta(client, consulta, tabela) {
+  const r = await client.query(`EXPLAIN (FORMAT JSON) ${consulta}`);
+  return descreverAcesso(r.rows[0]['QUERY PLAN'][0].Plan, tabela);
+}
 
 // Resultado de cada conferência, usado no resumo da CI.
 const resultados = [];
@@ -172,6 +214,32 @@ async function main() {
       const r = await client.query(regra.sql);
       conferir(regra.label, 0, Number(r.rows[0].count));
     }
+
+    iniciarEtapa(4, 'investigações');
+    for (const inv of INVESTIGACOES) {
+      const consulta = lerInvestigacao(inv.pasta, 'consulta.sql');
+      await client.query('BEGIN');
+      try {
+        conferir(`${inv.pasta}: acesso a ${inv.tabela} antes da correção`, inv.acessoAntes,
+          await acessoDaConsulta(client, consulta, inv.tabela));
+        const antes = await client.query(consulta);
+
+        await client.query(lerInvestigacao(inv.pasta, 'correcao.sql'));
+
+        conferir(`${inv.pasta}: acesso a ${inv.tabela} depois da correção`, inv.acessoDepois,
+          await acessoDaConsulta(client, consulta, inv.tabela));
+        const depois = await client.query(consulta);
+
+        // A correção não pode mudar o que a consulta devolve. O número de
+        // linhas entra no texto para que "0 linhas = 0 linhas" não passe
+        // despercebido como sucesso.
+        const resumo = (r) => `${r.rows.length} linhas, md5 ${crypto.createHash('md5').update(JSON.stringify(r.rows)).digest('hex')}`;
+        conferir(`${inv.pasta}: resultado igual antes e depois`, resumo(antes), resumo(depois));
+        if (antes.rows.length === 0) conferir(`${inv.pasta}: consulta devolve linhas`, true, false);
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    }
   });
 
   escreverResumoCi();
@@ -179,7 +247,7 @@ async function main() {
   if (process.exitCode === 1) {
     console.log('\nValidação FALHOU — ver itens marcados com ✘ acima.');
   } else {
-    console.log('\nValidação OK — ambiente, schema e volume de dados estão como esperado.');
+    console.log('\nValidação OK — ambiente, schema, volume de dados e investigações estão como esperado.');
   }
 }
 
