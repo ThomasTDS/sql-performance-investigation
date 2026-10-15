@@ -1,5 +1,6 @@
 # ⚡ SQL Performance Investigation
 
+![CI](https://github.com/ThomasTDS/sql-performance-investigation/actions/workflows/ci.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-MIT-blue.svg)
 ![postgres](https://img.shields.io/badge/PostgreSQL-16-blue.svg)
 
@@ -77,10 +78,20 @@ Sobe um PostgreSQL 16 na porta `5432` (usuário e senha `postgres`, banco `perfo
 docker compose down -v
 ```
 
+## Integração contínua
+
+A cada pull request e a cada push na `main`, o GitHub Actions executa dois jobs:
+
+- **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux.
+- **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5`.
+
+Os dois jobs comparam os dados com os mesmos valores esperados. Assim, a CI garante que o volume gerado é idêntico no Windows, no Linux e no container. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
+
 ## Estrutura do repositório
 
 ```
 .
+├── .github/workflows/ci.yml   # integração contínua (GitHub Actions)
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
 ├── package.json
 ├── scripts/
