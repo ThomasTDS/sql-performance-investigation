@@ -15,6 +15,62 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ---
 
+## Modelo de dados
+
+É o mesmo CRM/ERP de vendas do projeto anterior: `clientes`, `vendedores`, `produtos`, `pedidos`, `itens_pedido` e `pagamentos` (ver [`sql/01_schema.sql`](sql/01_schema.sql)).
+
+Propositalmente, o schema só tem os índices que o PostgreSQL cria sozinho: um por chave primária e o da restrição `UNIQUE` de `vendedores.email`. O PostgreSQL **não** cria índice para chave estrangeira. Cada índice adicional entra como correção dentro de uma investigação, com o plano de execução antes e depois como evidência. A validação falha se aparecer algum índice fora dessa lista.
+
+## Pré-requisitos
+
+- [Node.js](https://nodejs.org/) 24 ou superior (com npm).
+- [Docker](https://www.docker.com/) com Docker Compose — **opcional**, apenas para quem preferir rodar o banco num container.
+
+Não é preciso instalar o PostgreSQL: a validação baixa e executa um binário real do PostgreSQL 16 automaticamente.
+
+## Como executar
+
+### 1. Instalar as dependências
+
+```bash
+npm ci
+```
+
+### 2. Rodar a validação
+
+```bash
+npm run validate
+```
+
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere que a versão é a 16, carrega o schema e verifica as tabelas e os índices.
+
+### Alternativa: banco com Docker Compose
+
+```bash
+docker compose up -d --wait
+```
+
+Sobe um PostgreSQL 16 na porta `5432` (usuário e senha `postgres`, banco `performance_investigation`) e executa, na criação, os scripts da pasta `sql/`. Para derrubar o banco e apagar os dados:
+
+```bash
+docker compose down -v
+```
+
+## Estrutura do repositório
+
+```
+.
+├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
+├── package.json
+├── scripts/
+│   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
+│   └── validate.js            # validação executada localmente e na CI
+└── sql/
+    └── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos
+```
+
+---
+
 ## Licença
 
 Distribuído sob a licença MIT. Veja [LICENSE](LICENSE) para mais detalhes.
