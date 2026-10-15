@@ -17,3 +17,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      # Na primeira subida, os scripts de sql/ geram o volume de dados
+      # (uns 20 a 40 s). Falhas durante esse período não contam como
+      # tentativa.
+      start_period: 120s

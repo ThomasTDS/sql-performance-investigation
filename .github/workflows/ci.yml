@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Permite disparar a CI manualmente em qualquer branch, pela aba Actions
+  # ou com: gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validação (Postgres embarcado)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Ambiente, schema e volume de dados. Os md5 esperados do volume
+      # foram gerados no Windows: passar aqui confirma que a geração é
+      # reprodutível também no Linux.
+      - run: npm run validate
+
+  docker:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # --wait só retorna quando o healthcheck passa, ou seja, depois que
+      # todos os scripts de sql/ foram carregados (o healthcheck usa TCP,
+      # que só abre ao fim da inicialização).
+      - name: Subir o banco
+        run: docker compose up -d --wait --wait-timeout 300
+
+      # Confere que o banco do container tem a mesma codificação e o mesmo
+      # locale do embarcado, e que o volume gerado é idêntico: mesma
+      # quantidade de linhas e mesmo md5 (os mesmos valores esperados do
+      # VOLUME_ESPERADO em scripts/validate.js).
+      - name: Conferir banco e volume
+        run: |
+          # < /dev/null: sem isso, o exec consome a entrada padrão e engole
+          # a lista de tabelas do while abaixo, que pararia na primeira.
+          query() {
+            docker compose exec -T postgres psql -U postgres -d performance_investigation -tAc "$1" < /dev/null
+          }
+          marca() { [ "$1" = "$2" ] && echo "✅" || echo "❌"; }
+          falhas=0
+          conferencias=0
+          linha() {
+            conferencias=$((conferencias + 1))
+            echo "| $1 | $2 | $3 | $(marca "$2" "$3") |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$1: esperado $2, encontrado $3"
+            [ "$2" = "$3" ] || falhas=$((falhas + 1))
+          }
+
+          {
+            echo "## Docker Compose"
+            echo ""
+            echo "| Conferência | Esperado | Encontrado | |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          linha "codificação e locale" "UTF8 C C" \
+            "$(query "SELECT pg_encoding_to_char(encoding) || ' ' || datcollate || ' ' || datctype FROM pg_database WHERE datname = current_database()")"
+
+          while read -r tabela linhas md5; do
+            encontrado=$(query "SELECT count(*) || ' ' || md5(string_agg(t::text, '|' ORDER BY id)) FROM $tabela AS t")
+            linha "$tabela (linhas e md5)" "$linhas $md5" "$encontrado"
+          done <<'EOF'
+          vendedores 50 beb38a7f6955962ac7810b4df2f808df
+          produtos 2000 50b6935a38405c212096490b7f320a18
+          clientes 50000 a5c515d89f529176b6e4b7e8d10a5a36
+          pedidos 500000 5a4f5e437c3a2c0df4554f59cdbaf071
+          itens_pedido 1500939 aac34c64ce985b0102f2b48907644e26
+          pagamentos 487490 ab485b579c31fce4c9cc0aded4e42619
+          EOF
+
+          # Garante que o loop percorreu todas as tabelas: 1 conferência de
+          # codificação e locale + 6 tabelas.
+          linha "conferências executadas" "7" "$conferencias"
+
+          [ "$falhas" -eq 0 ]
+
+      - name: Logs do container em caso de falha
+        if: failure()
+        run: docker compose logs postgres
+
+      - name: Derrubar o banco
+        if: always()
+        run: docker compose down -v

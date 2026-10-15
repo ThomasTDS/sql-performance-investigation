@@ -13,6 +13,7 @@
 // nas próximas etapas.
 
 const path = require('node:path');
+const fs = require('node:fs');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
 
 const PORT = 5433;
@@ -85,10 +86,41 @@ const COERENCIA = [
   },
 ];
 
+// Resultado de cada conferência, usado no resumo da CI.
+const resultados = [];
+let etapaAtual = '';
+
+function iniciarEtapa(numero, nome) {
+  etapaAtual = nome;
+  console.log(`\n--- Etapa ${numero}: ${nome} ---`);
+}
+
 function conferir(label, esperado, encontrado) {
   const ok = esperado === encontrado;
   console.log(`  ${ok ? '✔' : '✘'} ${label}: esperado ${esperado}, encontrado ${encontrado}`);
+  resultados.push({ etapa: etapaAtual, label, esperado, encontrado, ok });
   if (!ok) process.exitCode = 1;
+}
+
+// No GitHub Actions, GITHUB_STEP_SUMMARY aponta para um arquivo cujo
+// conteúdo (Markdown) aparece na página da execução. Fora do Actions a
+// variável não existe e nada é escrito.
+function escreverResumoCi() {
+  const arquivo = process.env.GITHUB_STEP_SUMMARY;
+  if (!arquivo) return;
+
+  const okCount = resultados.filter((r) => r.ok).length;
+  const linhas = [
+    '## Validação (Postgres embarcado)',
+    '',
+    `**${okCount}/${resultados.length} conferências OK**${okCount === resultados.length ? '' : ' — ver os itens marcados com ❌'}`,
+    '',
+    '| Etapa | Conferência | Esperado | Encontrado | |',
+    '|---|---|---|---|---|',
+    ...resultados.map((r) => `| ${r.etapa} | ${r.label} | ${r.esperado} | ${r.encontrado} | ${r.ok ? '✅' : '❌'} |`),
+    '',
+  ];
+  fs.appendFileSync(arquivo, linhas.join('\n') + '\n');
 }
 
 async function listar(client, sql) {
@@ -98,7 +130,7 @@ async function listar(client, sql) {
 
 async function main() {
   await comPostgresEmbarcado({ porta: PORT, pasta: DATA_DIR }, async (client) => {
-    console.log('\n--- Etapa 1: ambiente ---');
+    iniciarEtapa(1, 'ambiente');
     const result = await client.query('SHOW server_version_num');
     // server_version_num tem o formato MMmmmm (ex.: 160014 = 16.14).
     const major = Math.floor(Number(result.rows[0].server_version_num) / 10000);
@@ -112,7 +144,7 @@ async function main() {
     conferir('locale de ordenação (LC_COLLATE)', 'C', datcollate);
     conferir('locale de caracteres (LC_CTYPE)', 'C', datctype);
 
-    console.log('\n--- Etapa 2: schema ---');
+    iniciarEtapa(2, 'schema');
     await client.query(lerSql('01_schema.sql'));
     conferir(
       'tabelas',
@@ -125,7 +157,7 @@ async function main() {
       await listar(client, "SELECT indexname AS nome FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1"),
     );
 
-    console.log('\n--- Etapa 3: volume de dados ---');
+    iniciarEtapa(3, 'volume de dados');
     const inicio = Date.now();
     await client.query(lerSql('02_volume.sql'));
     console.log(`  Volume gerado em ${((Date.now() - inicio) / 1000).toFixed(1)} s`);
@@ -141,6 +173,8 @@ async function main() {
       conferir(regra.label, 0, Number(r.rows[0].count));
     }
   });
+
+  escreverResumoCi();
 
   if (process.exitCode === 1) {
     console.log('\nValidação FALHOU — ver itens marcados com ✘ acima.');
