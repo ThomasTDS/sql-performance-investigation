@@ -42,7 +42,9 @@ npm ci
 npm run validate
 ```
 
-O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere que a versão é a 16, carrega o schema e verifica as tabelas e os índices.
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema e verifica as tabelas e os índices.
+
+> **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
 
 ### Alternativa: banco com Docker Compose
 

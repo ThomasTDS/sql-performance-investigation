@@ -50,6 +50,14 @@ async function main() {
     const major = Math.floor(Number(result.rows[0].server_version_num) / 10000);
     conferir('versão major do PostgreSQL', VERSAO_MAJOR_ESPERADA, major);
 
+    const banco = await client.query(
+      'SELECT pg_encoding_to_char(encoding) AS encoding, datcollate, datctype FROM pg_database WHERE datname = current_database()',
+    );
+    const { encoding, datcollate, datctype } = banco.rows[0];
+    conferir('codificação do banco', 'UTF8', encoding);
+    conferir('locale de ordenação (LC_COLLATE)', 'C', datcollate);
+    conferir('locale de caracteres (LC_CTYPE)', 'C', datctype);
+
     console.log('\n--- Etapa 2: schema ---');
     await client.query(lerSql('01_schema.sql'));
     conferir(
