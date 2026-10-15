@@ -1,0 +1,16 @@
+# Node
+node_modules/
+npm-debug.log
+
+# Postgres (embedded, usado só pra validação local)
+.pgdata/
+.pgdata-*/
+
+# Environment files
+.env
+.env.local
+
+# VS Code
+.vscode/
+
+Documentos internos/
