@@ -45,12 +45,16 @@ jobs:
       # VOLUME_ESPERADO em scripts/validate.js).
       - name: Conferir banco e volume
         run: |
+          # < /dev/null: sem isso, o exec consome a entrada padrão e engole
+          # a lista de tabelas do while abaixo, que pararia na primeira.
           query() {
-            docker compose exec -T postgres psql -U postgres -d performance_investigation -tAc "$1"
+            docker compose exec -T postgres psql -U postgres -d performance_investigation -tAc "$1" < /dev/null
           }
           marca() { [ "$1" = "$2" ] && echo "✅" || echo "❌"; }
           falhas=0
+          conferencias=0
           linha() {
+            conferencias=$((conferencias + 1))
             echo "| $1 | $2 | $3 | $(marca "$2" "$3") |" >> "$GITHUB_STEP_SUMMARY"
             echo "$1: esperado $2, encontrado $3"
             [ "$2" = "$3" ] || falhas=$((falhas + 1))
@@ -77,6 +81,10 @@ jobs:
           itens_pedido 1500939 aac34c64ce985b0102f2b48907644e26
           pagamentos 487490 ab485b579c31fce4c9cc0aded4e42619
           EOF
+
+          # Garante que o loop percorreu todas as tabelas: 1 conferência de
+          # codificação e locale + 6 tabelas.
+          linha "conferências executadas" "7" "$conferencias"
 
           [ "$falhas" -eq 0 ]
 
