@@ -21,6 +21,25 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 Propositalmente, o schema só tem os índices que o PostgreSQL cria sozinho: um por chave primária e o da restrição `UNIQUE` de `vendedores.email`. O PostgreSQL **não** cria índice para chave estrangeira. Cada índice adicional entra como correção dentro de uma investigação, com o plano de execução antes e depois como evidência. A validação falha se aparecer algum índice fora dessa lista.
 
+### Volume de dados
+
+O script [`sql/02_volume.sql`](sql/02_volume.sql) gera os dados dentro do próprio PostgreSQL (`generate_series`), num período fixo de 2023 a 2025:
+
+| Tabela | Linhas |
+|---|---:|
+| `vendedores` | 50 |
+| `produtos` | 2.000 |
+| `clientes` | 50.000 |
+| `pedidos` | 500.000 |
+| `itens_pedido` | 1.500.939 |
+| `pagamentos` | 487.490 |
+
+O banco ocupa cerca de 210 MB. Três características guiam as investigações:
+
+- **Os dados estão corretos.** Datas em ordem (cadastro → pedido → pagamento), total do pedido igual à soma dos itens, preço do item igual ao do catálogo e pagamento coerente com o status do pedido. A validação confere cada uma dessas regras.
+- **A distribuição é desigual, como num sistema real.** 80% dos pedidos vêm de 20% dos clientes e 80% dos itens são de 20% dos produtos. Os status dos pedidos são 80% entregue, 10% confirmado, 5% pendente e 5% cancelado, e o número de pedidos cresce ano a ano.
+- **A geração é reprodutível.** Uma semente fixa (`setseed`) faz o script gerar exatamente os mesmos dados em qualquer máquina. A validação compara a quantidade de linhas e uma impressão digital (`md5`) de cada tabela com os valores esperados.
+
 ## Pré-requisitos
 
 - [Node.js](https://nodejs.org/) 24 ou superior (com npm).
@@ -42,7 +61,7 @@ npm ci
 npm run validate
 ```
 
-O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Nesta etapa, ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema e verifica as tabelas e os índices.
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema, verifica as tabelas e os índices e, por fim, gera o volume de dados e confere a quantidade de linhas, a reprodutibilidade e a coerência dos dados. A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
 
 > **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
 
@@ -52,7 +71,7 @@ O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificaç
 docker compose up -d --wait
 ```
 
-Sobe um PostgreSQL 16 na porta `5432` (usuário e senha `postgres`, banco `performance_investigation`) e executa, na criação, os scripts da pasta `sql/`. Para derrubar o banco e apagar os dados:
+Sobe um PostgreSQL 16 na porta `5432` (usuário e senha `postgres`, banco `performance_investigation`) e executa, na criação, os scripts da pasta `sql/`, inclusive a geração do volume. Por isso, o `--wait` leva alguns segundos a mais na primeira subida. Para derrubar o banco e apagar os dados:
 
 ```bash
 docker compose down -v
@@ -68,7 +87,8 @@ docker compose down -v
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
 │   └── validate.js            # validação executada localmente e na CI
 └── sql/
-    └── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos
+    ├── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos
+    └── 02_volume.sql          # geração reprodutível do volume de dados
 ```
 
 ---
