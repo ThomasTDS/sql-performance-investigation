@@ -1,9 +1,16 @@
 // Funções compartilhadas pelos scripts que rodam contra um Postgres
 // embarcado (binário real, baixado sob demanda, sem precisar de Docker).
 
+const path = require('node:path');
 const fs = require('node:fs');
 const EmbeddedPostgres = require('embedded-postgres').default;
 const { Client } = require('pg');
+
+const SQL_DIR = path.join(__dirname, '..', 'sql');
+
+function lerSql(nomeArquivo) {
+  return fs.readFileSync(path.join(SQL_DIR, nomeArquivo), 'utf-8');
+}
 
 // Sobe um Postgres limpo na porta e pasta informadas, executa `fn` com um
 // cliente conectado e, no fim (com ou sem erro), derruba o banco e apaga
@@ -55,4 +62,4 @@ function executar(main) {
     });
 }
 
-module.exports = { comPostgresEmbarcado, executar };
+module.exports = { lerSql, comPostgresEmbarcado, executar };
