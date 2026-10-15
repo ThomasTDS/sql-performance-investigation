@@ -88,6 +88,23 @@ jobs:
 
           [ "$falhas" -eq 0 ]
 
+      # Roda cada exploracao.sql como o leitor do relatório rodaria. Com
+      # ON_ERROR_STOP, o psql sai com erro na primeira query que falhar, e o
+      # job falha junto.
+      - name: Executar as explorações das investigações
+        run: |
+          echo "**Explorações das investigações** (executadas com \`ON_ERROR_STOP\`):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for arquivo in investigacoes/*/exploracao.sql; do
+            echo "::group::$arquivo"
+            if ! docker compose exec -T postgres psql -U postgres -d performance_investigation -v ON_ERROR_STOP=1 < "$arquivo"; then
+              echo "- ❌ \`$arquivo\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "::endgroup::"
+            echo "- ✅ \`$arquivo\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Logs do container em caso de falha
         if: failure()
         run: docker compose logs postgres

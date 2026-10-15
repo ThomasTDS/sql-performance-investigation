@@ -16,6 +16,21 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ---
 
+## Investigações
+
+| # | Investigação | Sintoma | Causa raiz | Antes → depois |
+|---|---|---|---|---|
+| 01 | [Chave estrangeira sem índice](investigacoes/01-fk-sem-indice/README.md) | Itens de um pedido levam ~60 ms para devolver 2 linhas | `itens_pedido.pedido_id` sem índice: a tabela inteira (1,5 milhão de linhas) é lida a cada consulta | `Seq Scan` ~57 ms → `Index Scan` ~0,05 ms |
+
+Cada investigação fica numa pasta própria, com:
+
+- `README.md`: o relatório (sintoma → hipóteses → evidência → causa raiz → correção → verificação), com os planos de execução como evidência;
+- `consulta.sql`: a consulta lenta do chamado;
+- `exploracao.sql`: as queries na ordem em que foram usadas;
+- `correcao.sql`: a correção proposta.
+
+A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado da consulta não mudou. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
+
 ## Modelo de dados
 
 É o mesmo CRM/ERP de vendas do projeto anterior: `clientes`, `vendedores`, `produtos`, `pedidos`, `itens_pedido` e `pagamentos` (ver [`sql/01_schema.sql`](sql/01_schema.sql)).
@@ -62,7 +77,7 @@ npm ci
 npm run validate
 ```
 
-O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema, verifica as tabelas e os índices e, por fim, gera o volume de dados e confere a quantidade de linhas, a reprodutibilidade e a coerência dos dados. A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema, verifica as tabelas e os índices gera o volume de dados e confere a quantidade de linhas, a reprodutibilidade e a coerência dos dados e, por fim, verifica cada investigação (plano antes e depois da correção e resultado idêntico). A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
 
 > **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
 
@@ -93,6 +108,8 @@ Os dois jobs comparam os dados com os mesmos valores esperados. Assim, a CI gara
 .
 ├── .github/workflows/ci.yml   # integração contínua (GitHub Actions)
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
+├── investigacoes/
+│   └── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
 ├── package.json
 ├── scripts/
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
