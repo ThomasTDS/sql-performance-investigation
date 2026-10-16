@@ -81,6 +81,8 @@ O banco ocupa cerca de 210 MB. Três características guiam as investigações:
 - **A distribuição é desigual, como num sistema real.** 80% dos pedidos vêm de 20% dos clientes e 80% dos itens são de 20% dos produtos. Os status dos pedidos são 80% entregue, 10% confirmado, 5% pendente e 5% cancelado, e o número de pedidos cresce ano a ano.
 - **A geração é reprodutível.** Uma semente fixa (`setseed`) faz o script gerar exatamente os mesmos dados em qualquer máquina. A validação compara a quantidade de linhas e uma impressão digital (`md5`) de cada tabela com os valores esperados.
 
+Depois da carga, o [`sql/03_vacuum.sql`](sql/03_vacuum.sql) roda um `VACUUM`. Sem ele, a primeira consulta que lê cada página logo depois da carga ainda precisaria gravar as marcas de visibilidade das linhas (*hint bits*), e a primeira execução de cada investigação seria mais lenta que as seguintes. O `VACUUM` também preenche o mapa de visibilidade, que permite *Index Only Scans*.
+
 ## Pré-requisitos
 
 - [Node.js](https://nodejs.org/) 24 ou superior (com npm).
@@ -106,7 +108,7 @@ O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificaç
 
 1. **Ambiente:** versão (16), codificação (`UTF8`) e locale (`C`) do banco.
 2. **Schema:** tabelas e índices esperados.
-3. **Volume de dados:** quantidade de linhas, reprodutibilidade (`md5`) e coerência entre as tabelas.
+3. **Volume de dados:** quantidade de linhas, reprodutibilidade (`md5`), coerência entre as tabelas e o mapa de visibilidade preenchido pelo `VACUUM`.
 4. **Triagem:** executa a carga simulada e confere que as três consultas que mais leem blocos, segundo a `pg_stat_statements`, são as das investigações.
 5. **Investigações:** plano antes e depois de cada correção e resultado idêntico.
 
@@ -178,7 +180,8 @@ Os dois jobs comparam os dados com os mesmos valores esperados, gerados original
 │   └── validate.js            # validação executada localmente e na CI
 └── sql/
     ├── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos
-    └── 02_volume.sql          # geração reprodutível do volume de dados
+    ├── 02_volume.sql          # geração reprodutível do volume de dados
+    └── 03_vacuum.sql          # VACUUM depois da carga
 ```
 
 ---

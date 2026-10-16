@@ -82,9 +82,14 @@ jobs:
           pagamentos 487490 ab485b579c31fce4c9cc0aded4e42619
           EOF
 
+          # O 03_vacuum.sql rodou na inicialização: nenhuma tabela com
+          # páginas fora do mapa de visibilidade.
+          linha "tabelas fora do mapa de visibilidade (VACUUM)" "0" \
+            "$(query "SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relallvisible < relpages")"
+
           # Garante que o loop percorreu todas as tabelas: 1 conferência de
-          # codificação e locale + 6 tabelas.
-          linha "conferências executadas" "7" "$conferencias"
+          # codificação e locale + 6 tabelas + 1 do VACUUM.
+          linha "conferências executadas" "8" "$conferencias"
 
           [ "$falhas" -eq 0 ]
 

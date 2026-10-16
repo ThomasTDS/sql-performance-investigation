@@ -15,7 +15,7 @@ Arquivos desta investigação:
 - [`exploracao.sql`](exploracao.sql): as queries na ordem em que foram usadas, numeradas conforme os passos abaixo.
 - [`correcao.sql`](correcao.sql): a correção proposta.
 
-> **Sobre os tempos:** foram medidos num notebook com Windows e variam de máquina para máquina e entre execuções. Logo depois da carga do volume, a primeira leitura de cada página é mais lenta, porque o PostgreSQL ainda grava as *hint bits* (marcas de visibilidade das linhas). Por isso, os tempos do "antes" vêm de uma segunda execução. O que não varia, e é o que a CI confere, é **o formato do plano** e **o resultado** da consulta.
+> **Sobre os tempos:** foram medidos num notebook com Windows e variam de máquina para máquina e entre execuções. O que não varia, e é o que a CI confere, é **o formato do plano** e **o resultado** da consulta.
 
 ---
 

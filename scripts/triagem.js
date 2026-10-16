@@ -48,6 +48,7 @@ async function main() {
       console.log('Carregando o schema e gerando o volume de dados...');
       await client.query(lerSql('01_schema.sql'));
       await client.query(lerSql('02_volume.sql'));
+      await client.query(lerSql('03_vacuum.sql'));
       await triagem(client);
     });
     return;

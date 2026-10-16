@@ -397,6 +397,18 @@ async function main() {
     const inicio = Date.now();
     await client.query(lerSql('02_volume.sql'));
     console.log(`  Volume gerado em ${((Date.now() - inicio) / 1000).toFixed(1)} s`);
+    // Numa chamada própria: o VACUUM não roda dentro de uma transação.
+    await client.query(lerSql('03_vacuum.sql'));
+    // Depois do VACUUM, todas as páginas ficam marcadas no mapa de
+    // visibilidade (relallvisible = relpages). Sem ele, a primeira leitura de
+    // cada página ainda grava as hint bits, e as investigações que citam
+    // tempos e buffers teriam números diferentes na primeira execução.
+    const naoVisiveis = await client.query(`
+      SELECT string_agg(relname, ', ' ORDER BY relname) AS tabelas
+      FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relallvisible < relpages`);
+    conferir('tabelas com páginas fora do mapa de visibilidade (VACUUM)', '(nenhuma)',
+      naoVisiveis.rows[0].tabelas || '(nenhuma)');
     for (const [tabela, esperado] of Object.entries(VOLUME_ESPERADO)) {
       const r = await client.query(
         `SELECT count(*) AS linhas, md5(string_agg(t::text, '|' ORDER BY id)) AS md5 FROM ${tabela} AS t`,

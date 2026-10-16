@@ -1,0 +1,14 @@
+-- VACUUM depois da carga do volume (02_volume.sql).
+--
+-- Logo depois de uma carga, cada página ainda não tem as "hint bits"
+-- (marcas de que as linhas estão visíveis para todos). A primeira consulta
+-- que lê a página precisa conferir isso e gravar as marcas, o que deixa a
+-- primeira execução mais lenta que as seguintes e suja páginas no cache.
+-- O VACUUM faz esse trabalho de uma vez e também preenche o mapa de
+-- visibilidade, que permite Index Only Scans.
+--
+-- Fica num arquivo separado porque o VACUUM não pode rodar dentro de uma
+-- transação: o Docker executa os arquivos de sql/ um comando por vez, e a
+-- validação e a triagem enviam este arquivo numa chamada própria. Não altera
+-- os dados nem as estatísticas (o ANALYZE fica no 02_volume.sql).
+VACUUM;
