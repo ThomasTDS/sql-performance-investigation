@@ -92,13 +92,23 @@ const COERENCIA = [
 
 // Cada investigação tem consulta.sql (a consulta lenta) e correcao.sql. O
 // "acesso" é como o plano lê a tabela investigada: o tipo do nó e, se
-// houver, o índice usado (ver descreverAcesso).
+// houver, o índice usado (ver descreverAcesso). Opcionalmente, tentativa.sql
+// guarda uma correção que já tinha sido tentada antes do chamado e não
+// resolveu; ela é aplicada antes da correção, e acessoTentativa confere que
+// de fato não resolveu.
 const INVESTIGACOES = [
   {
     pasta: '01-fk-sem-indice',
     tabela: 'itens_pedido',
     acessoAntes: 'Seq Scan',
     acessoDepois: 'Index Scan usando idx_itens_pedido_pedido_id',
+  },
+  {
+    pasta: '02-indice-ignorado',
+    tabela: 'clientes',
+    acessoAntes: 'Seq Scan',
+    acessoTentativa: 'Seq Scan',
+    acessoDepois: 'Index Scan usando idx_clientes_lower_email',
   },
 ];
 
@@ -224,6 +234,12 @@ async function main() {
           await acessoDaConsulta(client, consulta, inv.tabela));
         const antes = await client.query(consulta);
 
+        if (inv.acessoTentativa) {
+          await client.query(lerInvestigacao(inv.pasta, 'tentativa.sql'));
+          conferir(`${inv.pasta}: acesso a ${inv.tabela} com a tentativa anterior ao chamado`, inv.acessoTentativa,
+            await acessoDaConsulta(client, consulta, inv.tabela));
+        }
+
         await client.query(lerInvestigacao(inv.pasta, 'correcao.sql'));
 
         conferir(`${inv.pasta}: acesso a ${inv.tabela} depois da correção`, inv.acessoDepois,
@@ -233,7 +249,7 @@ async function main() {
         // A correção não pode mudar o que a consulta devolve. O número de
         // linhas entra no texto para que "0 linhas = 0 linhas" não passe
         // despercebido como sucesso.
-        const resumo = (r) => `${r.rows.length} linhas, md5 ${crypto.createHash('md5').update(JSON.stringify(r.rows)).digest('hex')}`;
+        const resumo = (r) => `${r.rows.length} ${r.rows.length === 1 ? 'linha' : 'linhas'}, md5 ${crypto.createHash('md5').update(JSON.stringify(r.rows)).digest('hex')}`;
         conferir(`${inv.pasta}: resultado igual antes e depois`, resumo(antes), resumo(depois));
         if (antes.rows.length === 0) conferir(`${inv.pasta}: consulta devolve linhas`, true, false);
       } finally {

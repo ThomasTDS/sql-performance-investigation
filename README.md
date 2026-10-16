@@ -21,15 +21,17 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 | # | Investigação | Sintoma | Causa raiz | Antes → depois |
 |---|---|---|---|---|
 | 01 | [Chave estrangeira sem índice](investigacoes/01-fk-sem-indice/README.md) | Itens de um pedido levam ~60 ms para devolver 2 linhas | `itens_pedido.pedido_id` sem índice: a tabela inteira (1,5 milhão de linhas) é lida a cada consulta | `Seq Scan` ~57 ms → `Index Scan` ~0,05 ms |
+| 02 | [Índice ignorado por causa de uma função](investigacoes/02-indice-ignorado/README.md) | A busca por email continua lenta mesmo depois de criarem um índice em `email` | A consulta filtra por `lower(email)`, que o índice comum não contém | `Seq Scan` ~7 ms → `Index Scan` ~0,01 ms |
 
 Cada investigação fica numa pasta própria, com:
 
 - `README.md`: o relatório (sintoma → hipóteses → evidência → causa raiz → correção → verificação), com os planos de execução como evidência;
 - `consulta.sql`: a consulta lenta do chamado;
 - `exploracao.sql`: as queries na ordem em que foram usadas;
-- `correcao.sql`: a correção proposta.
+- `correcao.sql`: a correção proposta;
+- `tentativa.sql` (opcional): uma correção tentada antes do chamado que não resolveu.
 
-A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado da consulta não mudou. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
+A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado da consulta não mudou. Quando existe uma tentativa, a validação confere também que ela, de fato, não mudou o plano. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
 
 ## Modelo de dados
 
@@ -109,7 +111,8 @@ Os dois jobs comparam os dados com os mesmos valores esperados. Assim, a CI gara
 ├── .github/workflows/ci.yml   # integração contínua (GitHub Actions)
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
 ├── investigacoes/
-│   └── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
+│   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
+│   └── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
 ├── package.json
 ├── scripts/
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
