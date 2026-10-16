@@ -1,0 +1,12 @@
+-- A migração corrigida: o mesmo índice, com CONCURRENTLY. Ela segura um
+-- ShareUpdateExclusiveLock, que não conflita com INSERT, UPDATE e DELETE: a
+-- aplicação continua escrevendo em itens_pedido durante a construção.
+--
+-- Cuidados (ver o README desta investigação):
+--   - não pode rodar dentro de uma transação (BEGIN ... COMMIT), e muitas
+--     ferramentas de migração abrem uma transação por padrão;
+--   - antes de construir, espera terminarem as transações que estão
+--     escrevendo na tabela; uma transação esquecida aberta segura a migração;
+--   - se falhar no meio, deixa para trás um índice inválido (indisvalid =
+--     false), que precisa ser removido antes de tentar de novo.
+CREATE INDEX CONCURRENTLY idx_itens_pedido_pedido_id ON itens_pedido (pedido_id);

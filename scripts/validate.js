@@ -11,15 +11,18 @@
 // 4. Triagem: executa a carga simulada da aplicação e confere que as três
 //    consultas que mais leem blocos, segundo a pg_stat_statements, são as
 //    das investigações, na ordem esperada.
-// 5. Para cada investigação, numa transação desfeita no fim (ROLLBACK):
+// 5. Para cada investigação de plano, numa transação desfeita no fim (ROLLBACK):
 //    confere como a consulta acessa a tabela investigada antes da correção,
 //    aplica a correção, confere o acesso de novo e confere que o resultado
 //    da consulta não mudou. Tempos não são conferidos: variam de máquina
-//    para máquina e deixariam a CI instável.
+//    para máquina e deixariam a CI instável. Na investigação de bloqueio
+//    (04), confere com várias conexões o que acontece com as escritas da
+//    aplicação durante a migração (ver verificarBloqueio).
 
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const { Client } = require('pg');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
 const { CARGA, executarCarga } = require('./carga');
 
@@ -237,6 +240,126 @@ async function listar(client, sql) {
   return result.rows.map((r) => r.nome).join(', ');
 }
 
+// Investigação 04 (bloqueio): não compara planos, e sim o que acontece com
+// outras sessões enquanto a migração roda. Usa conexões extras: A roda a
+// migração, B faz o papel da aplicação e C segura uma transação de escrita
+// aberta. As esperas usam lock_timeout, e cada conferência compara um
+// resultado discreto (modo de bloqueio, "bloqueado"/"passou", válido ou não),
+// nunca um tempo.
+const BLOQUEIO_PASTA = '04-bloqueio-create-index';
+const BLOQUEIO_INDICE = 'idx_itens_pedido_pedido_id';
+const INSERT_APLICACAO =
+  'INSERT INTO itens_pedido (pedido_id, produto_id, quantidade, preco_unitario) VALUES (1, 1, 1, 84.19)';
+
+async function novaConexao() {
+  const c = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: 'postgres', database: 'postgres' });
+  await c.connect();
+  return c;
+}
+
+async function modoDoBloqueio(observador, pid) {
+  const r = await observador.query(
+    "SELECT mode FROM pg_locks WHERE relation = 'itens_pedido'::regclass AND pid = $1 AND granted", [pid]);
+  return r.rows.map((l) => l.mode).join(', ') || '(nenhum)';
+}
+
+// Tenta a escrita da aplicação numa transação desfeita em seguida. Com
+// lock_timeout, uma espera por bloqueio vira o erro 55P03 em vez de travar.
+async function tentarEscrita(sessao) {
+  await sessao.query('BEGIN');
+  try {
+    await sessao.query(INSERT_APLICACAO);
+    return 'passou';
+  } catch (err) {
+    if (err.code === '55P03') return 'bloqueado';
+    throw err;
+  } finally {
+    await sessao.query('ROLLBACK');
+  }
+}
+
+async function esperarFase(observador, pid, fase) {
+  for (let i = 0; i < 100; i++) {
+    const r = await observador.query('SELECT phase FROM pg_stat_progress_create_index WHERE pid = $1', [pid]);
+    if (r.rows[0] && r.rows[0].phase === fase) return fase;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return '(fase não atingida em 10 s)';
+}
+
+async function indiceValido(observador) {
+  const r = await observador.query(
+    'SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass($1)', [BLOQUEIO_INDICE]);
+  return r.rows[0] ? r.rows[0].indisvalid : '(não existe)';
+}
+
+async function verificarBloqueio(observador) {
+  const migracao = lerInvestigacao(BLOQUEIO_PASTA, 'migracao.sql');
+  const migracaoCorrigida = lerInvestigacao(BLOQUEIO_PASTA, 'migracao-corrigida.sql');
+  const [a, b, c] = [await novaConexao(), await novaConexao(), await novaConexao()];
+  const rotulo = (texto) => `${BLOQUEIO_PASTA}: ${texto}`;
+  try {
+    await b.query("SET lock_timeout = '1s'");
+
+    // Parte 1: a migração comum, com a transação aberta (como se a
+    // construção do índice ainda estivesse em andamento).
+    await a.query('BEGIN');
+    await a.query(migracao);
+    conferir(rotulo('migração comum: bloqueio em itens_pedido'), 'ShareLock', await modoDoBloqueio(observador, a.processID));
+    conferir(rotulo('migração comum: escrita da aplicação'), 'bloqueado', await tentarEscrita(b));
+    const leitura = await b.query('SELECT count(*) FROM itens_pedido WHERE pedido_id = 1');
+    conferir(rotulo('migração comum: leitura da aplicação'), 'passou', leitura.rows.length === 1 ? 'passou' : 'falhou');
+    await a.query('ROLLBACK');
+
+    // Parte 2: a migração corrigida, com C segurando uma escrita aberta. A
+    // migração espera C antes de construir, mas a aplicação continua
+    // escrevendo.
+    await c.query('BEGIN');
+    await c.query(INSERT_APLICACAO);
+    const construcao = a.query(migracaoCorrigida);
+    conferir(rotulo('migração corrigida: fase com uma escrita aberta'), 'waiting for writers before build',
+      await esperarFase(observador, a.processID, 'waiting for writers before build'));
+    conferir(rotulo('migração corrigida: bloqueio em itens_pedido'), 'ShareUpdateExclusiveLock',
+      await modoDoBloqueio(observador, a.processID));
+    conferir(rotulo('migração corrigida: escrita da aplicação'), 'passou', await tentarEscrita(b));
+    await c.query('ROLLBACK');
+    await construcao;
+    conferir(rotulo('migração corrigida: índice válido no fim'), true, await indiceValido(observador));
+    await observador.query(`DROP INDEX ${BLOQUEIO_INDICE}`);
+
+    // Parte 3: as armadilhas da migração corrigida.
+    let resultado;
+    await a.query('BEGIN');
+    try {
+      await a.query(migracaoCorrigida);
+      resultado = 'aceita';
+    } catch (err) {
+      resultado = err.code === '25001' ? 'recusada' : `erro ${err.code}`;
+    }
+    await a.query('ROLLBACK');
+    conferir(rotulo('migração corrigida dentro de uma transação'), 'recusada', resultado);
+
+    await c.query('BEGIN');
+    await c.query(INSERT_APLICACAO);
+    await a.query("SET lock_timeout = '1s'");
+    try {
+      await a.query(migracaoCorrigida);
+      resultado = 'concluída';
+    } catch (err) {
+      resultado = err.code === '55P03' ? 'cancelada' : `erro ${err.code}`;
+    }
+    await c.query('ROLLBACK');
+    conferir(rotulo('migração corrigida cancelada (lock_timeout)'), 'cancelada', resultado);
+    conferir(rotulo('índice deixado pela migração cancelada é válido?'), false, await indiceValido(observador));
+  } finally {
+    // Volta ao schema base, sem o índice, aconteça o que acontecer acima.
+    await observador.query(`DROP INDEX IF EXISTS ${BLOQUEIO_INDICE}`);
+    for (const sessao of [a, b, c]) await sessao.end();
+  }
+  conferir(rotulo('schema base intacto no fim'), INDICES_ESPERADOS.join(', '),
+    await listar(observador, "SELECT indexname AS nome FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1"));
+}
+
 async function main() {
   await comPostgresEmbarcado({
     porta: PORT,
@@ -342,6 +465,8 @@ async function main() {
         await client.query('ROLLBACK');
       }
     }
+
+    await verificarBloqueio(client);
   });
 
   escreverResumoCi();
