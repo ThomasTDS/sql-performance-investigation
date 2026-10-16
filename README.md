@@ -151,12 +151,13 @@ Zera as estatísticas da `pg_stat_statements`, executa a carga simulada da aplic
 
 ## Integração contínua
 
-A cada pull request e a cada push na `main`, o GitHub Actions executa dois jobs:
+A cada pull request e a cada push na `main`, o GitHub Actions executa:
 
 - **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux.
-- **Docker Compose:** sobe o banco pelo `docker-compose.yml`, confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5` executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
+- **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale, o `VACUUM` e, para cada tabela, a quantidade de linhas e o `md5`. Depois, executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
+- **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 52 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
 
-Os dois jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux e no container. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
+Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux, no container e nas outras versões do PostgreSQL. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
 
 ## Estrutura do repositório
 

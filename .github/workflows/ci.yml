@@ -27,6 +27,39 @@ jobs:
       # reprodutível também no Linux.
       - run: npm run validate
 
+  # Informativo: a mesma validação em versões mais novas do PostgreSQL, para
+  # ver o que mudaria num upgrade (planos, estatísticas, bloqueios). Não está
+  # entre os checks obrigatórios da proteção da main: se ficar vermelho, o
+  # merge continua liberado, e o resumo da execução mostra o que mudou.
+  outras-versoes:
+    name: PostgreSQL ${{ matrix.versao }} (informativo)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - versao: 17
+            pacote: 17.10.0-beta.17
+          - versao: 18
+            pacote: 18.4.0-beta.17
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Troca o embedded-postgres só nesta execução (--no-save: o
+      # package.json e o package-lock.json continuam na versão 16).
+      - run: npm install --no-save embedded-postgres@${{ matrix.pacote }}
+
+      - run: npm run validate
+        env:
+          PG_VERSAO_ESPERADA: ${{ matrix.versao }}
+
   docker:
     name: Docker Compose
     runs-on: ubuntu-latest
