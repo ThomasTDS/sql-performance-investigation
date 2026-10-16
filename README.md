@@ -4,8 +4,6 @@
 ![license](https://img.shields.io/badge/license-MIT-blue.svg)
 ![postgres](https://img.shields.io/badge/PostgreSQL-16-blue.svg)
 
-> 🚧 **Projeto em construção.** Este README será completado a cada etapa.
-
 ## Descrição
 
 Este repositório investiga problemas de **performance** em consultas SQL num banco PostgreSQL com volume realista de dados, usando a mesma metodologia de investigação de bugs de produção: sintoma → hipóteses → evidência (planos de execução com `EXPLAIN ANALYZE`) → causa raiz → correção proposta → verificação.
@@ -13,6 +11,14 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 É a continuação do projeto [sql-defect-investigation](https://github.com/ThomasTDS/sql-defect-investigation), que trata de **qualidade de dados** (dado errado). Aqui o dado está certo, mas a consulta está lenta.
 
 > **Nota sobre os dados:** todo o schema e os dados deste projeto são fictícios, criados especificamente para este projeto de portfólio. Nenhuma informação de empregador atual ou anterior foi usada.
+
+### Destaques
+
+- **Leitura de planos de execução** (`EXPLAIN (ANALYZE, BUFFERS)`) como evidência de cada hipótese, inclusive para descartá-las.
+- **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*).
+- **Correções que "não deram certo" também documentadas:** em duas investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
+- **Verificação automatizada e determinística:** a CI não confere tempos, que variam de máquina para máquina. Ela confere o formato do plano, a quantidade de linhas lidas e que a correção não muda o resultado da consulta.
+- **Massa de dados reprodutível:** 2,5 milhões de linhas geradas com semente fixa, conferidas por `md5` no Windows, no Linux e em Docker.
 
 ---
 
@@ -33,7 +39,15 @@ Cada investigação fica numa pasta própria, com:
 - `tentativa.sql` (opcional): uma correção tentada antes do chamado que não resolveu;
 - `consulta-corrigida.sql` (opcional): a consulta reescrita, quando a correção inclui mudar a própria consulta.
 
-A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado não mudou (comparando a consulta corrigida com a original, quando há reescrita). Quando existe uma tentativa, ela é aplicada e desfeita antes da correção, e a validação confere que ela, de fato, não resolveu. Quando o tipo de acesso não basta para diferenciar os cenários, a validação também confere quantas linhas da tabela o plano leu, um número que, ao contrário do tempo, é determinístico. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
+Para cada investigação, a validação abre uma transação e:
+
+1. confere como a consulta lê a tabela investigada **antes** da correção (por exemplo, `Seq Scan`);
+2. se houver tentativa, aplica, confere que ela de fato não resolveu e a desfaz;
+3. aplica a correção e confere como a consulta (ou a consulta corrigida, quando há reescrita) lê a tabela **depois** (por exemplo, `Index Scan`);
+4. confere que o **resultado** é exatamente o mesmo antes e depois;
+5. desfaz tudo com `ROLLBACK`, e o schema base continua sem os índices.
+
+Quando o tipo de acesso não basta para diferenciar os cenários (por exemplo, dois `Index Scan` no mesmo índice), a validação também confere quantas linhas da tabela o plano leu. Ao contrário do tempo, esse número é determinístico. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
 
 ## Modelo de dados
 
@@ -81,7 +95,14 @@ npm ci
 npm run validate
 ```
 
-O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações e, ao final, derruba o banco e apaga os dados. Ele confere a versão (16), a codificação (`UTF8`) e o locale (`C`) do banco, carrega o schema, verifica as tabelas e os índices gera o volume de dados e confere a quantidade de linhas, a reprodutibilidade e a coerência dos dados e, por fim, verifica cada investigação (plano antes e depois da correção e resultado idêntico). A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
+O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificações em quatro etapas e, ao final, derruba o banco e apaga os dados:
+
+1. **Ambiente:** versão (16), codificação (`UTF8`) e locale (`C`) do banco.
+2. **Schema:** tabelas e índices esperados.
+3. **Volume de dados:** quantidade de linhas, reprodutibilidade (`md5`) e coerência entre as tabelas.
+4. **Investigações:** plano antes e depois de cada correção e resultado idêntico.
+
+A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
 
 > **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
 
@@ -97,20 +118,32 @@ Sobe um PostgreSQL 16 na porta `5432` (usuário e senha `postgres`, banco `perfo
 docker compose down -v
 ```
 
+### Reproduzir uma investigação
+
+Com o banco do Docker Compose no ar, cada relatório pode ser refeito passo a passo. O `exploracao.sql` traz as queries na ordem dos passos do relatório e desfaz, no fim, tudo o que criou:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d performance_investigation < investigacoes/01-fk-sem-indice/exploracao.sql
+```
+
+Para explorar interativamente, abra um `psql` no container (`docker compose exec postgres psql -U postgres -d performance_investigation`) ou conecte qualquer cliente SQL em `localhost:5432`, com usuário e senha `postgres`. Os tempos de execução vão variar em relação aos dos relatórios, mas o formato dos planos e as quantidades de linhas lidas devem ser os mesmos.
+
 ## Integração contínua
 
 A cada pull request e a cada push na `main`, o GitHub Actions executa dois jobs:
 
 - **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux.
-- **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5`.
+- **Docker Compose:** sobe o banco pelo `docker-compose.yml`, confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5` e executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1`. Se qualquer query de um relatório falhar, o job falha.
 
-Os dois jobs comparam os dados com os mesmos valores esperados. Assim, a CI garante que o volume gerado é idêntico no Windows, no Linux e no container. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
+Os dois jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux e no container. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
 
 ## Estrutura do repositório
 
 ```
 .
-├── .github/workflows/ci.yml   # integração contínua (GitHub Actions)
+├── .github/
+│   ├── dependabot.yml         # atualizações mensais de dependências
+│   └── workflows/ci.yml       # integração contínua (GitHub Actions)
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
 ├── investigacoes/
 │   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
