@@ -21,7 +21,9 @@ Arquivos desta investigação:
 
 ## 1. Sintoma relatado
 
-> Chamado do time de plataforma: "A busca de cliente por email, usada no login e na tela de atendimento, é a consulta que mais consome CPU do banco no total. Cada execução é rápida, mas ela roda a cada login. **Já criamos um índice em `email`** e nada mudou."
+> Chamado do time de plataforma: "A busca de cliente por email, usada no login e na tela de atendimento, é uma das consultas que mais consomem tempo do banco no total. Cada execução é rápida, mas ela roda a cada login. **Já criamos um índice em `email`** e nada mudou."
+
+Na [triagem](../00-triagem/README.md) com a `pg_stat_statements`, ela aparece entre as três que mais pesam: **705 blocos por execução** para devolver 1 linha.
 
 A busca ([`consulta.sql`](consulta.sql)) aplica `lower()` dos dois lados, para que `Cliente04217@Exemplo.com` encontre `cliente04217@exemplo.com`:
 

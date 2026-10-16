@@ -105,6 +105,19 @@ jobs:
             echo "- ✅ \`$arquivo\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
+      # Roda a triagem (investigacoes/00-triagem) como o leitor rodaria: a
+      # carga simulada e o ranking da pg_stat_statements no banco do
+      # container. Confirma que o docker-compose.yml carrega a extensão.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Executar a triagem
+        run: npm run triagem
+
       - name: Logs do container em caso de falha
         if: failure()
         run: docker compose logs postgres

@@ -1,6 +1,10 @@
 services:
   postgres:
     image: postgres:16
+    # pg_stat_statements registra o custo acumulado de cada consulta (usada
+    # na triagem, investigacoes/00-triagem). Precisa ser carregada na
+    # inicialização do servidor.
+    command: ['postgres', '-c', 'shared_preload_libraries=pg_stat_statements']
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

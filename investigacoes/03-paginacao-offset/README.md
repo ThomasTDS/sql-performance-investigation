@@ -24,6 +24,8 @@ Arquivos desta investigação:
 
 > Chamado do time de backoffice: "A listagem de pedidos ficou lenta e criamos um índice para a ordenação. As primeiras páginas ficaram instantâneas, mas as últimas continuam lentas. A exportação noturna, que percorre todas as páginas, não termina a tempo."
 
+Na [triagem](../00-triagem/README.md) com a `pg_stat_statements`, feita sobre o banco antes de qualquer índice, a listagem lidera o ranking por tempo total: **4.275 blocos por execução** para devolver 20 linhas.
+
 A listagem ([`consulta.sql`](consulta.sql)) mostra os pedidos mais recentes primeiro, 20 por página. O `id` desempata pedidos com a mesma data, para que a ordem seja estável. O exemplo é a página 20.025:
 
 ```sql

@@ -14,6 +14,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ### Destaques
 
+- **Triagem antes da otimização:** uma carga simulada da aplicação e a `pg_stat_statements` mostram quais consultas mais pesam no banco. As três do topo viram as investigações.
 - **Leitura de planos de execução** (`EXPLAIN (ANALYZE, BUFFERS)`) como evidência de cada hipótese, inclusive para descartá-las.
 - **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*).
 - **Correções que "não deram certo" também documentadas:** em duas investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
@@ -23,6 +24,8 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 ---
 
 ## Investigações
+
+A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto de partida: com uma carga simulada da aplicação e a extensão `pg_stat_statements`, ela mostra quais consultas mais pesam no banco. As três do topo do ranking são investigadas a seguir:
 
 | # | Investigação | Sintoma | Causa raiz | Antes → depois |
 |---|---|---|---|---|
@@ -100,9 +103,10 @@ O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificaç
 1. **Ambiente:** versão (16), codificação (`UTF8`) e locale (`C`) do banco.
 2. **Schema:** tabelas e índices esperados.
 3. **Volume de dados:** quantidade de linhas, reprodutibilidade (`md5`) e coerência entre as tabelas.
-4. **Investigações:** plano antes e depois de cada correção e resultado idêntico.
+4. **Triagem:** executa a carga simulada e confere que as três consultas que mais leem blocos, segundo a `pg_stat_statements`, são as das investigações.
+5. **Investigações:** plano antes e depois de cada correção e resultado idêntico.
 
-A execução completa leva cerca de 30 segundos, a maior parte na geração do volume.
+A execução completa leva cerca de 40 segundos, a maior parte na geração do volume.
 
 > **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
 
@@ -128,12 +132,21 @@ docker compose exec -T postgres psql -U postgres -d performance_investigation < 
 
 Para explorar interativamente, abra um `psql` no container (`docker compose exec postgres psql -U postgres -d performance_investigation`) ou conecte qualquer cliente SQL em `localhost:5432`, com usuário e senha `postgres`. Os tempos de execução vão variar em relação aos dos relatórios, mas o formato dos planos e as quantidades de linhas lidas devem ser os mesmos.
 
+### Rodar a triagem
+
+```bash
+npm run triagem                  # no banco do Docker Compose
+npm run triagem -- --embarcado   # sem Docker, num PostgreSQL temporário
+```
+
+Zera as estatísticas da `pg_stat_statements`, executa a carga simulada da aplicação e mostra o ranking das consultas que mais pesam no banco (ver a [investigação 00](investigacoes/00-triagem/README.md)).
+
 ## Integração contínua
 
 A cada pull request e a cada push na `main`, o GitHub Actions executa dois jobs:
 
 - **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux.
-- **Docker Compose:** sobe o banco pelo `docker-compose.yml`, confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5` e executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1`. Se qualquer query de um relatório falhar, o job falha.
+- **Docker Compose:** sobe o banco pelo `docker-compose.yml`, confere a codificação, o locale e, para cada tabela, a quantidade de linhas e o `md5` executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
 
 Os dois jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux e no container. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
 
@@ -146,12 +159,15 @@ Os dois jobs comparam os dados com os mesmos valores esperados, gerados original
 │   └── workflows/ci.yml       # integração contínua (GitHub Actions)
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
 ├── investigacoes/
+│   ├── 00-triagem/            # relatório e ranking da pg_stat_statements
 │   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
 │   ├── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
 │   └── 03-paginacao-offset/   # idem, mais a consulta reescrita
 ├── package.json
 ├── scripts/
+│   ├── carga.js               # carga simulada da aplicação (triagem)
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
+│   ├── triagem.js             # npm run triagem
 │   └── validate.js            # validação executada localmente e na CI
 └── sql/
     ├── 01_schema.sql          # tabelas do CRM/ERP, sem índices além dos automáticos

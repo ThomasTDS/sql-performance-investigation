@@ -4,7 +4,8 @@
   "private": true,
   "description": "Investigação de performance de consultas SQL num PostgreSQL com volume realista de dados, usando planos de execução como evidência.",
   "scripts": {
-    "validate": "node scripts/validate.js"
+    "validate": "node scripts/validate.js",
+    "triagem": "node scripts/triagem.js"
   },
   "keywords": [
     "sql",
