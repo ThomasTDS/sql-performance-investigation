@@ -17,6 +17,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 - **Triagem antes da otimização:** uma carga simulada da aplicação e a `pg_stat_statements` mostram quais consultas mais pesam no banco. As três do topo viram as investigações.
 - **Leitura de planos de execução** (`EXPLAIN (ANALYZE, BUFFERS)`) como evidência de cada hipótese, inclusive para descartá-las.
 - **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*).
+- **O risco da própria correção:** uma investigação de bloqueio mostra, com várias sessões simultâneas, por que um `CREATE INDEX` em produção trava as escritas e quais são as armadilhas do `CONCURRENTLY`.
 - **Correções que "não deram certo" também documentadas:** em duas investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
 - **Verificação automatizada e determinística:** a CI não confere tempos, que variam de máquina para máquina. Ela confere o formato do plano, a quantidade de linhas lidas e que a correção não muda o resultado da consulta.
 - **Massa de dados reprodutível:** 2,5 milhões de linhas geradas com semente fixa, conferidas por `md5` no Windows, no Linux e em Docker.
@@ -32,6 +33,7 @@ A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto d
 | 01 | [Chave estrangeira sem índice](investigacoes/01-fk-sem-indice/README.md) | Itens de um pedido levam ~60 ms para devolver 2 linhas | `itens_pedido.pedido_id` sem índice: a tabela inteira (1,5 milhão de linhas) é lida a cada consulta | `Seq Scan` ~57 ms → `Index Scan` ~0,05 ms |
 | 02 | [Índice ignorado por causa de uma função](investigacoes/02-indice-ignorado/README.md) | A busca por email continua lenta mesmo depois de criarem um índice em `email` | A consulta filtra por `lower(email)`, que o índice comum não contém | `Seq Scan` ~7 ms → `Index Scan` ~0,01 ms |
 | 03 | [Paginação com OFFSET alto](investigacoes/03-paginacao-offset/README.md) | As primeiras páginas da listagem de pedidos são instantâneas, mas as últimas são lentas, mesmo com índice | `OFFSET` lê e descarta todas as linhas anteriores à página | 400.500 linhas lidas (~660 ms) → 20 linhas (~0,08 ms), com paginação por chave |
+| 04 | [Bloqueio causado pelo CREATE INDEX](investigacoes/04-bloqueio-create-index/README.md) | A gravação de pedidos parou durante a migração que aplicava a correção da investigação 01 | `CREATE INDEX` comum segura um `ShareLock`, que bloqueia `INSERT`, `UPDATE` e `DELETE` | Escrita bloqueada → escrita liberada, com `CONCURRENTLY` (e as armadilhas dele) |
 
 Cada investigação fica numa pasta própria, com:
 
@@ -51,6 +53,8 @@ Para cada investigação, a validação abre uma transação e:
 5. desfaz tudo com `ROLLBACK`, e o schema base continua sem os índices.
 
 Quando o tipo de acesso não basta para diferenciar os cenários (por exemplo, dois `Index Scan` no mesmo índice), a validação também confere quantas linhas da tabela o plano leu. Ao contrário do tempo, esse número é determinístico. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
+
+A investigação 04 (bloqueio) tem um formato próprio: `migracao.sql`, `migracao-corrigida.sql` e um `exploracao.sql` com consultas de diagnóstico para um terminal observador. A validação abre várias conexões e confere o que acontece com as escritas da aplicação enquanto a migração roda (bloqueada ou liberada), além do estado do índice no fim.
 
 ## Modelo de dados
 
@@ -130,6 +134,8 @@ Com o banco do Docker Compose no ar, cada relatório pode ser refeito passo a pa
 docker compose exec -T postgres psql -U postgres -d performance_investigation < investigacoes/01-fk-sem-indice/exploracao.sql
 ```
 
+Na investigação 04 (bloqueio), o `exploracao.sql` traz só consultas de diagnóstico: o roteiro completo usa três terminais `psql` simultâneos e está no [relatório](investigacoes/04-bloqueio-create-index/README.md).
+
 Para explorar interativamente, abra um `psql` no container (`docker compose exec postgres psql -U postgres -d performance_investigation`) ou conecte qualquer cliente SQL em `localhost:5432`, com usuário e senha `postgres`. Os tempos de execução vão variar em relação aos dos relatórios, mas o formato dos planos e as quantidades de linhas lidas devem ser os mesmos.
 
 ### Rodar a triagem
@@ -162,7 +168,8 @@ Os dois jobs comparam os dados com os mesmos valores esperados, gerados original
 │   ├── 00-triagem/            # relatório e ranking da pg_stat_statements
 │   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
 │   ├── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
-│   └── 03-paginacao-offset/   # idem, mais a consulta reescrita
+│   ├── 03-paginacao-offset/   # idem, mais a consulta reescrita
+│   └── 04-bloqueio-create-index/  # migração, migração corrigida e diagnóstico de bloqueio
 ├── package.json
 ├── scripts/
 │   ├── carga.js               # carga simulada da aplicação (triagem)

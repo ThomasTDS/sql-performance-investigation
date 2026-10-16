@@ -199,7 +199,7 @@ O `npm run validate` (e a CI) repete esta verificação a cada execução, numa 
 
 ## 6. Recomendações
 
-- **Aplicar a correção em produção** com `CREATE INDEX CONCURRENTLY` e conferir depois que o índice ficou válido (`pg_index.indisvalid`). Um `CONCURRENTLY` interrompido deixa para trás um índice inválido, que ocupa espaço e não é usado.
+- **Aplicar a correção em produção** com `CREATE INDEX CONCURRENTLY` e conferir depois que o índice ficou válido (`pg_index.indisvalid`). A [investigação 04](../04-bloqueio-create-index/README.md) mostra o que acontece quando ela é aplicada sem `CONCURRENTLY`. Um `CONCURRENTLY` interrompido deixa para trás um índice inválido, que ocupa espaço e não é usado.
 - **Avaliar `pagamentos.pedido_id`**, que tem o mesmo padrão de acesso (pagamentos de um pedido) e já aparece lento na remoção de pedidos.
 - **Não indexar as demais chaves estrangeiras às cegas:** criar índice para `pedidos.cliente_id`, `pedidos.vendedor_id` e `itens_pedido.produto_id` só se houver consultas que filtrem por elas.
 - **Prevenção:** na revisão de toda nova chave estrangeira, perguntar "alguém vai buscar por esta coluna?". A consulta do passo 5 pode virar uma verificação periódica.
