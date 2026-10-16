@@ -1,0 +1,29 @@
+# Atualizações automáticas de dependências. Uma vez por mês, no máximo um
+# PR para as dependências npm e um para as actions da CI. Os PRs seguem o
+# fluxo normal: CI e merge manual.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      dependencias-npm:
+        patterns: ["*"]
+    ignore:
+      # A versão major do embedded-postgres acompanha a do PostgreSQL (16.x
+      # roda o PostgreSQL 16). A validação local precisa ficar na mesma
+      # versão do postgres:16 do docker-compose.yml, e os planos de execução
+      # das investigações podem mudar entre versões major. Trocar de versão
+      # do PostgreSQL é decisão manual, nos dois lugares ao mesmo tempo.
+      # Atualizações dentro da linha 16 continuam permitidas.
+      - dependency-name: embedded-postgres
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
