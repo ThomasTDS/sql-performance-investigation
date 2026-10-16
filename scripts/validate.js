@@ -8,7 +8,10 @@
 // 3. Gera o volume de dados e confere que ele é reprodutível (mesma
 //    quantidade de linhas e mesma impressão digital em qualquer máquina) e
 //    correto (nenhuma inconsistência entre as tabelas).
-// 4. Para cada investigação, numa transação desfeita no fim (ROLLBACK):
+// 4. Triagem: executa a carga simulada da aplicação e confere que as três
+//    consultas que mais leem blocos, segundo a pg_stat_statements, são as
+//    das investigações, na ordem esperada.
+// 5. Para cada investigação, numa transação desfeita no fim (ROLLBACK):
 //    confere como a consulta acessa a tabela investigada antes da correção,
 //    aplica a correção, confere o acesso de novo e confere que o resultado
 //    da consulta não mudou. Tempos não são conferidos: variam de máquina
@@ -18,6 +21,15 @@ const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
+const { CARGA, executarCarga } = require('./carga');
+
+// Triagem: as três consultas que mais leem blocos durante a carga simulada,
+// em ordem. Blocos lidos (shared_blks_hit + shared_blks_read) dependem dos
+// planos, não da velocidade da máquina; em planos paralelos oscilam algumas
+// unidades entre execuções, mas a distância entre as posições do ranking é
+// de dezenas de milhares de blocos. O tempo total, usado no dia a dia, muda
+// de ordem entre execuções (ver investigacoes/00-triagem).
+const TOP_TRIAGEM_ESPERADO = ['01-fk-sem-indice', '03-paginacao-offset', '02-indice-ignorado'];
 
 const INVESTIGACOES_DIR = path.join(__dirname, '..', 'investigacoes');
 const PORT = 5433;
@@ -226,7 +238,11 @@ async function listar(client, sql) {
 }
 
 async function main() {
-  await comPostgresEmbarcado({ porta: PORT, pasta: DATA_DIR }, async (client) => {
+  await comPostgresEmbarcado({
+    porta: PORT,
+    pasta: DATA_DIR,
+    postgresFlags: ['-c', 'shared_preload_libraries=pg_stat_statements'],
+  }, async (client) => {
     iniciarEtapa(1, 'ambiente');
     const result = await client.query('SHOW server_version_num');
     // server_version_num tem o formato MMmmmm (ex.: 160014 = 16.14).
@@ -270,7 +286,29 @@ async function main() {
       conferir(regra.label, 0, Number(r.rows[0].count));
     }
 
-    iniciarEtapa(4, 'investigações');
+    iniciarEtapa(4, 'triagem');
+    await client.query('CREATE EXTENSION pg_stat_statements');
+    await client.query('SELECT pg_stat_statements_reset()');
+    await executarCarga(client);
+    const estatisticas = await client.query(`
+      SELECT query, calls, shared_blks_hit + shared_blks_read AS blocos
+      FROM pg_stat_statements
+      WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())`);
+    // As consultas parametrizadas ficam registradas com o texto exato
+    // enviado; é por ele que cada linha é ligada à consulta da carga. Por
+    // isso, a carga não usa constantes no SQL: a pg_stat_statements as
+    // troca por $n no texto registrado (ex.: LIMIT 20 vira LIMIT $2).
+    const daCarga = CARGA.map((consulta) => {
+      const linha = estatisticas.rows.find((r) => r.query === consulta.sql);
+      return { ...consulta, calls: linha ? Number(linha.calls) : 0, blocos: linha ? Number(linha.blocos) : 0 };
+    });
+    conferir('consultas da carga registradas, com todas as execuções',
+      CARGA.map((c) => c.execucoes).join(', '), daCarga.map((c) => c.calls).join(', '));
+    const top = [...daCarga].sort((a, b) => b.blocos - a.blocos).slice(0, 3);
+    conferir('top 3 por blocos lidos', TOP_TRIAGEM_ESPERADO.join(', '),
+      top.map((c) => c.investigacao || c.nome).join(', '));
+
+    iniciarEtapa(5, 'investigações');
     for (const inv of INVESTIGACOES) {
       const consulta = lerInvestigacao(inv.pasta, 'consulta.sql');
       const consultaDepois = inv.consultaCorrigida ? lerInvestigacao(inv.pasta, 'consulta-corrigida.sql') : consulta;
@@ -311,7 +349,7 @@ async function main() {
   if (process.exitCode === 1) {
     console.log('\nValidação FALHOU — ver itens marcados com ✘ acima.');
   } else {
-    console.log('\nValidação OK — ambiente, schema, volume de dados e investigações estão como esperado.');
+    console.log('\nValidação OK — ambiente, schema, volume de dados, triagem e investigações estão como esperado.');
   }
 }
 

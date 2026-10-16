@@ -35,8 +35,9 @@ async function copiarShareSeNecessario() {
 
 // Sobe um Postgres limpo na porta e pasta informadas, executa `fn` com um
 // cliente conectado e, no fim (com ou sem erro), derruba o banco e apaga
-// a pasta de dados. `opcoesCliente` é repassado ao Client do pg.
-async function comPostgresEmbarcado({ porta, pasta, opcoesCliente = {} }, fn) {
+// a pasta de dados. `opcoesCliente` é repassado ao Client do pg, e
+// `postgresFlags` ao servidor (ex.: ['-c', 'shared_preload_libraries=...']).
+async function comPostgresEmbarcado({ porta, pasta, opcoesCliente = {}, postgresFlags = [] }, fn) {
   const shareCopia = await copiarShareSeNecessario();
   const pg = new EmbeddedPostgres({
     databaseDir: pasta,
@@ -50,6 +51,7 @@ async function comPostgresEmbarcado({ porta, pasta, opcoesCliente = {} }, fn) {
     // índice B-tree comum não atende LIKE 'abc%' —, então os três
     // ambientes (local, Docker e CI) usam UTF-8 com locale C.
     initdbFlags: ['--encoding=UTF8', '--locale=C', ...(shareCopia ? ['-L', shareCopia] : [])],
+    postgresFlags,
   });
 
   console.log('Subindo Postgres (embarcado, sem Docker)...');

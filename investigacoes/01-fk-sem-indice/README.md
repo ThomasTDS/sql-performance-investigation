@@ -23,6 +23,8 @@ Arquivos desta investigação:
 
 > Chamado do time de produto: "A tela de detalhes do pedido ficou lenta conforme a base cresceu." No relatório de consultas lentas do banco, a consulta dos itens do pedido aparece no topo: cerca de **60 ms por execução**, contra menos de 1 ms das outras consultas da mesma tela.
 
+Na [triagem](../00-triagem/README.md) com a `pg_stat_statements`, é a consulta que mais lê blocos: **9.571 blocos por execução** para devolver, em média, 3 linhas.
+
 A consulta ([`consulta.sql`](consulta.sql)) busca os itens de um único pedido, com o nome do produto:
 
 ```sql
