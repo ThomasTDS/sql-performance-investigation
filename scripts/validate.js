@@ -37,7 +37,11 @@ const TOP_TRIAGEM_ESPERADO = ['01-fk-sem-indice', '03-paginacao-offset', '02-ind
 const INVESTIGACOES_DIR = path.join(__dirname, '..', 'investigacoes');
 const PORT = 5433;
 const DATA_DIR = path.join(__dirname, '..', '.pgdata-validate');
-const VERSAO_MAJOR_ESPERADA = 16;
+// A versão oficial do projeto é a 16 (a mesma do postgres:16 do
+// docker-compose.yml). O job informativo da CI roda esta mesma validação em
+// outras versões, instalando outro embedded-postgres e informando a versão
+// aqui, para mostrar o que muda num upgrade.
+const VERSAO_MAJOR_ESPERADA = Number(process.env.PG_VERSAO_ESPERADA || 16);
 
 const TABELAS_ESPERADAS = ['clientes', 'itens_pedido', 'pagamentos', 'pedidos', 'produtos', 'vendedores'];
 
@@ -223,7 +227,7 @@ function escreverResumoCi() {
 
   const okCount = resultados.filter((r) => r.ok).length;
   const linhas = [
-    '## Validação (Postgres embarcado)',
+    `## Validação (PostgreSQL ${VERSAO_MAJOR_ESPERADA} embarcado)`,
     '',
     `**${okCount}/${resultados.length} conferências OK**${okCount === resultados.length ? '' : ' — ver os itens marcados com ❌'}`,
     '',
