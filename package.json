@@ -5,7 +5,8 @@
   "description": "Investigação de performance de consultas SQL num PostgreSQL com volume realista de dados, usando planos de execução como evidência.",
   "scripts": {
     "validate": "node scripts/validate.js",
-    "triagem": "node scripts/triagem.js"
+    "triagem": "node scripts/triagem.js",
+    "medir": "node scripts/medir.js"
   },
   "keywords": [
     "sql",

@@ -149,11 +149,19 @@ npm run triagem -- --embarcado   # sem Docker, num PostgreSQL temporário
 
 Zera as estatísticas da `pg_stat_statements`, executa a carga simulada da aplicação e mostra o ranking das consultas que mais pesam no banco (ver a [investigação 00](investigacoes/00-triagem/README.md)).
 
+### Medir os tempos
+
+```bash
+npm run medir
+```
+
+Mede cada cenário das investigações 01 a 03 (antes, tentativa e depois: mediana de 5 execuções, linhas lidas e buffers) e grava [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), com a data, o sistema, a CPU e a versão do PostgreSQL. Os tempos citados nos relatórios são aproximados. Esse arquivo é o registro padronizado, e para atualizá-lo basta rodar o script de novo.
+
 ## Integração contínua
 
 A cada pull request e a cada push na `main`, o GitHub Actions executa:
 
-- **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux.
+- **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux. Em seguida, `npm run medir` mostra a tabela de medições no resumo da execução, como referência de uma máquina Linux padronizada. Os tempos não são conferidos.
 - **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale, o `VACUUM` e, para cada tabela, a quantidade de linhas e o `md5`. Depois, executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
 - **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 52 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
 
@@ -172,10 +180,13 @@ Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente
 │   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
 │   ├── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
 │   ├── 03-paginacao-offset/   # idem, mais a consulta reescrita
-│   └── 04-bloqueio-create-index/  # migração, migração corrigida e diagnóstico de bloqueio
+│   ├── 04-bloqueio-create-index/  # migração, migração corrigida e diagnóstico de bloqueio
+│   └── MEDICOES.md            # tempos medidos (gerado por npm run medir)
 ├── package.json
 ├── scripts/
 │   ├── carga.js               # carga simulada da aplicação (triagem)
+│   ├── investigacoes.js       # configuração das investigações de plano e leitura dos planos
+│   ├── medir.js               # npm run medir
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado
 │   ├── triagem.js             # npm run triagem
 │   └── validate.js            # validação executada localmente e na CI
