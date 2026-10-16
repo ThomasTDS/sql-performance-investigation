@@ -1,0 +1,11 @@
+-- Correção, parte 1 de 2: o mesmo índice da tentativa. Ele é necessário
+-- (é o que permite ler os pedidos já na ordem da listagem, a partir de
+-- qualquer ponto), mas não é suficiente: a parte 2 é a reescrita da
+-- consulta, em consulta-corrigida.sql.
+--
+-- Um índice em (data_pedido, id) atende as duas direções de ordenação: para
+-- ORDER BY data_pedido DESC, id DESC, o PostgreSQL o percorre de trás para
+-- frente (Index Scan Backward).
+--
+-- Em produção, use CREATE INDEX CONCURRENTLY (ver a investigação 01).
+CREATE INDEX idx_pedidos_data_id ON pedidos (data_pedido, id);
