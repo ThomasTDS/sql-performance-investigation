@@ -22,6 +22,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 |---|---|---|---|---|
 | 01 | [Chave estrangeira sem índice](investigacoes/01-fk-sem-indice/README.md) | Itens de um pedido levam ~60 ms para devolver 2 linhas | `itens_pedido.pedido_id` sem índice: a tabela inteira (1,5 milhão de linhas) é lida a cada consulta | `Seq Scan` ~57 ms → `Index Scan` ~0,05 ms |
 | 02 | [Índice ignorado por causa de uma função](investigacoes/02-indice-ignorado/README.md) | A busca por email continua lenta mesmo depois de criarem um índice em `email` | A consulta filtra por `lower(email)`, que o índice comum não contém | `Seq Scan` ~7 ms → `Index Scan` ~0,01 ms |
+| 03 | [Paginação com OFFSET alto](investigacoes/03-paginacao-offset/README.md) | As primeiras páginas da listagem de pedidos são instantâneas, mas as últimas são lentas, mesmo com índice | `OFFSET` lê e descarta todas as linhas anteriores à página | 400.500 linhas lidas (~660 ms) → 20 linhas (~0,08 ms), com paginação por chave |
 
 Cada investigação fica numa pasta própria, com:
 
@@ -29,9 +30,10 @@ Cada investigação fica numa pasta própria, com:
 - `consulta.sql`: a consulta lenta do chamado;
 - `exploracao.sql`: as queries na ordem em que foram usadas;
 - `correcao.sql`: a correção proposta;
-- `tentativa.sql` (opcional): uma correção tentada antes do chamado que não resolveu.
+- `tentativa.sql` (opcional): uma correção tentada antes do chamado que não resolveu;
+- `consulta-corrigida.sql` (opcional): a consulta reescrita, quando a correção inclui mudar a própria consulta.
 
-A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado da consulta não mudou. Quando existe uma tentativa, a validação confere também que ela, de fato, não mudou o plano. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
+A validação aplica cada correção dentro de uma transação e confere o formato do plano antes e depois (por exemplo, `Seq Scan` → `Index Scan`) e que o resultado não mudou (comparando a consulta corrigida com a original, quando há reescrita). Quando existe uma tentativa, ela é aplicada e desfeita antes da correção, e a validação confere que ela, de fato, não resolveu. Quando o tipo de acesso não basta para diferenciar os cenários, a validação também confere quantas linhas da tabela o plano leu, um número que, ao contrário do tempo, é determinístico. No fim, faz `ROLLBACK`, e o schema base continua sem os índices. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
 
 ## Modelo de dados
 
@@ -112,7 +114,8 @@ Os dois jobs comparam os dados com os mesmos valores esperados. Assim, a CI gara
 ├── docker-compose.yml         # PostgreSQL 16 em container (opcional)
 ├── investigacoes/
 │   ├── 01-fk-sem-indice/      # relatório, consulta, exploração e correção
-│   └── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
+│   ├── 02-indice-ignorado/    # idem, mais a tentativa anterior ao chamado
+│   └── 03-paginacao-offset/   # idem, mais a consulta reescrita
 ├── package.json
 ├── scripts/
 │   ├── postgres-embarcado.js  # sobe e derruba o PostgreSQL embarcado

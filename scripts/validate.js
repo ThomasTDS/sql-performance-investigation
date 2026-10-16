@@ -92,10 +92,17 @@ const COERENCIA = [
 
 // Cada investigação tem consulta.sql (a consulta lenta) e correcao.sql. O
 // "acesso" é como o plano lê a tabela investigada: o tipo do nó e, se
-// houver, o índice usado (ver descreverAcesso). Opcionalmente, tentativa.sql
-// guarda uma correção que já tinha sido tentada antes do chamado e não
-// resolveu; ela é aplicada antes da correção, e acessoTentativa confere que
-// de fato não resolveu.
+// houver, o índice usado (ver descreverAcesso). Opcionais:
+//   - tentativa.sql + acessoTentativa: uma correção tentada antes do
+//     chamado, que não resolveu. É aplicada num savepoint, conferida e
+//     desfeita antes da correção, para cada uma ser avaliada sozinha.
+//   - consulta-corrigida.sql + consultaCorrigida: true: quando a correção
+//     inclui reescrever a consulta. Depois da correção, o plano conferido é
+//     o dela, e o resultado dela tem que ser igual ao da consulta original.
+//   - linhasAntes/linhasTentativa/linhasDepois: quantas linhas da tabela o
+//     plano lê (ver linhasLidas). Necessário quando o tipo de acesso não
+//     basta para diferenciar os cenários (ex.: dois Index Scan no mesmo
+//     índice, um lendo 400 mil linhas e outro 20).
 const INVESTIGACOES = [
   {
     pasta: '01-fk-sem-indice',
@@ -109,6 +116,17 @@ const INVESTIGACOES = [
     acessoAntes: 'Seq Scan',
     acessoTentativa: 'Seq Scan',
     acessoDepois: 'Index Scan usando idx_clientes_lower_email',
+  },
+  {
+    pasta: '03-paginacao-offset',
+    tabela: 'pedidos',
+    consultaCorrigida: true,
+    acessoAntes: 'Seq Scan',
+    linhasAntes: 500000,
+    acessoTentativa: 'Index Scan usando idx_pedidos_data_id',
+    linhasTentativa: 400500,
+    acessoDepois: 'Index Scan usando idx_pedidos_data_id',
+    linhasDepois: 20,
   },
 ];
 
@@ -131,6 +149,33 @@ function descreverAcesso(plano, tabela) {
   };
   visitar(plano);
   return acessos.join(' + ') || '(tabela não aparece no plano)';
+}
+
+// Linhas da tabela que o plano realmente leu (EXPLAIN ANALYZE): as que o nó
+// devolveu mais as que ele descartou no filtro, vezes o número de execuções
+// do nó. Ao contrário do tempo, é determinístico. Em nós paralelos, o
+// PostgreSQL mostra médias por processo, arredondadas; por isso, esta
+// conferência só é usada em investigações com planos sem paralelismo.
+function linhasLidas(plano, tabela) {
+  let total = 0;
+  const visitar = (no) => {
+    if (no['Relation Name'] === tabela) {
+      total += ((no['Actual Rows'] || 0) + (no['Rows Removed by Filter'] || 0)) * (no['Actual Loops'] || 1);
+    }
+    (no.Plans || []).forEach(visitar);
+  };
+  visitar(plano);
+  return total;
+}
+
+// Confere o acesso à tabela e, se houver valor esperado, as linhas lidas
+// (este último executa a consulta, com EXPLAIN ANALYZE).
+async function conferirPlano(client, rotulo, consulta, tabela, acessoEsperado, linhasEsperadas) {
+  conferir(`${rotulo}: acesso a ${tabela}`, acessoEsperado, await acessoDaConsulta(client, consulta, tabela));
+  if (linhasEsperadas !== undefined) {
+    const r = await client.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${consulta}`);
+    conferir(`${rotulo}: linhas lidas de ${tabela}`, linhasEsperadas, linhasLidas(r.rows[0]['QUERY PLAN'][0].Plan, tabela));
+  }
 }
 
 async function acessoDaConsulta(client, consulta, tabela) {
@@ -228,23 +273,26 @@ async function main() {
     iniciarEtapa(4, 'investigações');
     for (const inv of INVESTIGACOES) {
       const consulta = lerInvestigacao(inv.pasta, 'consulta.sql');
+      const consultaDepois = inv.consultaCorrigida ? lerInvestigacao(inv.pasta, 'consulta-corrigida.sql') : consulta;
       await client.query('BEGIN');
       try {
-        conferir(`${inv.pasta}: acesso a ${inv.tabela} antes da correção`, inv.acessoAntes,
-          await acessoDaConsulta(client, consulta, inv.tabela));
+        await conferirPlano(client, `${inv.pasta}: antes da correção`, consulta, inv.tabela,
+          inv.acessoAntes, inv.linhasAntes);
         const antes = await client.query(consulta);
 
         if (inv.acessoTentativa) {
+          await client.query('SAVEPOINT tentativa');
           await client.query(lerInvestigacao(inv.pasta, 'tentativa.sql'));
-          conferir(`${inv.pasta}: acesso a ${inv.tabela} com a tentativa anterior ao chamado`, inv.acessoTentativa,
-            await acessoDaConsulta(client, consulta, inv.tabela));
+          await conferirPlano(client, `${inv.pasta}: com a tentativa anterior ao chamado`, consulta, inv.tabela,
+            inv.acessoTentativa, inv.linhasTentativa);
+          await client.query('ROLLBACK TO SAVEPOINT tentativa');
         }
 
         await client.query(lerInvestigacao(inv.pasta, 'correcao.sql'));
 
-        conferir(`${inv.pasta}: acesso a ${inv.tabela} depois da correção`, inv.acessoDepois,
-          await acessoDaConsulta(client, consulta, inv.tabela));
-        const depois = await client.query(consulta);
+        await conferirPlano(client, `${inv.pasta}: depois da correção${inv.consultaCorrigida ? ' (consulta corrigida)' : ''}`,
+          consultaDepois, inv.tabela, inv.acessoDepois, inv.linhasDepois);
+        const depois = await client.query(consultaDepois);
 
         // A correção não pode mudar o que a consulta devolve. O número de
         // linhas entra no texto para que "0 linhas = 0 linhas" não passe
