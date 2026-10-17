@@ -15,7 +15,7 @@ Arquivos desta investigação:
 - [`exploracao.sql`](exploracao.sql): as queries na ordem em que foram usadas, numeradas conforme os passos abaixo.
 - [`correcao.sql`](correcao.sql): a correção proposta.
 
-> **Sobre os tempos:** foram medidos num notebook com Windows e variam de máquina para máquina e entre execuções. O que não varia, e é o que a CI confere, é **o formato do plano** e **o resultado** da consulta.
+> **Sobre os tempos:** foram medidos num notebook com Windows e variam de máquina para máquina e entre execuções. O que não varia, e é o que a CI confere, é **o formato do plano** e **o resultado** da consulta. Medições padronizadas de todos os cenários, com data e ambiente, ficam em [`MEDICOES.md`](../MEDICOES.md) (`npm run medir`).
 
 ---
 

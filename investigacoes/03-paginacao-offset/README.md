@@ -16,7 +16,7 @@ Arquivos desta investigação:
 - [`correcao.sql`](correcao.sql): parte 1 da correção, o índice (o mesmo da tentativa: necessário, mas não suficiente).
 - [`consulta-corrigida.sql`](consulta-corrigida.sql): parte 2 da correção, a listagem reescrita com paginação por chave.
 
-> **Sobre os tempos:** são medianas de 5 execuções num notebook com Windows. Os valores absolutos variam muito: em outra sessão, na mesma máquina, a página 20.025 levou cerca de 190 ms sem índice e 200 ms com índice, contra 920 ms e 660 ms nesta. O que não varia, e é o que a CI confere, é o **formato do plano**, a **quantidade de linhas lidas** e o **resultado** da consulta.
+> **Sobre os tempos:** são medianas de 5 execuções num notebook com Windows. Os valores absolutos variam muito: em outra sessão, na mesma máquina, a página 20.025 levou cerca de 190 ms sem índice e 200 ms com índice, contra 920 ms e 660 ms nesta. O que não varia, e é o que a CI confere, é o **formato do plano**, a **quantidade de linhas lidas** e o **resultado** da consulta. Medições padronizadas de todos os cenários, com data e ambiente, ficam em [`MEDICOES.md`](../MEDICOES.md) (`npm run medir`).
 
 ---
 

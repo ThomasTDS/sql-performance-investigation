@@ -27,6 +27,12 @@ jobs:
       # reprodutível também no Linux.
       - run: npm run validate
 
+      # Só informativo: a tabela de tempos das investigações no resumo da
+      # execução, como referência de uma máquina Linux padronizada. Não
+      # confere nenhum tempo e não grava o MEDICOES.md.
+      - name: Medições (informativo)
+        run: npm run medir -- --sem-arquivo
+
   # Informativo: a mesma validação em versões mais novas do PostgreSQL, para
   # ver o que mudaria num upgrade (planos, estatísticas, bloqueios). Não está
   # entre os checks obrigatórios da proteção da main: se ficar vermelho, o
