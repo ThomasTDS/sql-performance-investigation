@@ -16,6 +16,9 @@ services:
       - '5432:5432'
     volumes:
       - ./sql:/docker-entrypoint-initdb.d:ro
+      # Arquivos que um exploracao.sql inclui com \i (ex.: o cenario.sql da
+      # investigação 05), já que o psql roda dentro do container.
+      - ./investigacoes:/investigacoes:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -h 127.0.0.1']
       interval: 5s

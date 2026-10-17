@@ -1,4 +1,4 @@
-// Mede as investigações de plano (01 a 03) e grava investigacoes/MEDICOES.md:
+// Mede as investigações de plano (01 a 03 e 05) e grava investigacoes/MEDICOES.md:
 // para cada cenário (antes, tentativa, depois), o plano, as linhas lidas, os
 // buffers e o tempo de execução (mediana e faixa de várias execuções).
 //
@@ -16,7 +16,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
-const { INVESTIGACOES, lerInvestigacao, linhasLidas, acessoDaConsulta } = require('./investigacoes');
+const { INVESTIGACOES, lerInvestigacao, linhasLidas, juncaoDaTabela, acessoDaConsulta } = require('./investigacoes');
 
 const EXECUCOES = 5;
 const ARQUIVO = path.join(__dirname, '..', 'investigacoes', 'MEDICOES.md');
@@ -26,7 +26,7 @@ const numero = (n, casas = 0) => n.toLocaleString('pt-BR', { minimumFractionDigi
 const ms = (t) => `${numero(t, t < 1 ? 3 : t < 10 ? 2 : 1)} ms`;
 
 // Uma execução descartada (aquece o cache) e depois EXECUCOES medidas.
-async function medirConsulta(client, consulta, tabela) {
+async function medirConsulta(client, consulta, { tabela, juncaoAntes }) {
   const acesso = await acessoDaConsulta(client, consulta, tabela);
   await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${consulta}`);
   const tempos = [];
@@ -38,7 +38,8 @@ async function medirConsulta(client, consulta, tabela) {
   }
   tempos.sort((a, b) => a - b);
   return {
-    acesso,
+    // Quando a investigação confere o join, ele aparece junto do acesso.
+    acesso: juncaoAntes ? `${acesso} → ${juncaoDaTabela(plano.Plan, tabela)}` : acesso,
     linhas: linhasLidas(plano.Plan, tabela),
     buffers: plano.Plan['Shared Hit Blocks'] + plano.Plan['Shared Read Blocks'],
     mediana: tempos[Math.floor(tempos.length / 2)],
@@ -53,15 +54,16 @@ async function medirInvestigacao(client, inv) {
   const cenarios = [];
   await client.query('BEGIN');
   try {
-    cenarios.push({ nome: 'antes', ...(await medirConsulta(client, consulta, inv.tabela)) });
+    if (inv.cenario) await client.query(lerInvestigacao(inv.pasta, 'cenario.sql'));
+    cenarios.push({ nome: 'antes', ...(await medirConsulta(client, consulta, inv)) });
     if (inv.acessoTentativa) {
       await client.query('SAVEPOINT tentativa');
       await client.query(lerInvestigacao(inv.pasta, 'tentativa.sql'));
-      cenarios.push({ nome: 'tentativa', ...(await medirConsulta(client, consulta, inv.tabela)) });
+      cenarios.push({ nome: 'tentativa', ...(await medirConsulta(client, consulta, inv)) });
       await client.query('ROLLBACK TO SAVEPOINT tentativa');
     }
     await client.query(lerInvestigacao(inv.pasta, 'correcao.sql'));
-    cenarios.push({ nome: 'depois', ...(await medirConsulta(client, consultaDepois, inv.tabela)) });
+    cenarios.push({ nome: 'depois', ...(await medirConsulta(client, consultaDepois, inv)) });
   } finally {
     await client.query('ROLLBACK');
   }
@@ -81,7 +83,7 @@ function gerarMarkdown(ambiente, resultados) {
     '',
     `Cada tempo é a mediana de ${EXECUCOES} execuções com \`EXPLAIN (ANALYZE, BUFFERS)\`, depois de uma execução descartada para aquecer o cache. A faixa mostra o menor e o maior tempo. Linhas lidas e buffers são da tabela investigada e da consulta inteira, respectivamente, e quase não variam entre máquinas. Os tempos variam: numa mesma máquina, já foram observadas diferenças de até 5 vezes entre sessões.`,
     '',
-    '| Investigação | Cenário | Acesso à tabela | Linhas lidas | Buffers | Tempo (mediana) | Faixa |',
+    '| Investigação | Cenário | Acesso à tabela (→ join) | Linhas lidas | Buffers | Tempo (mediana) | Faixa |',
     '|---|---|---|---:|---:|---:|---|',
   ];
   for (const { inv, cenarios } of resultados) {

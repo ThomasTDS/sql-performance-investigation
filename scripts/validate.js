@@ -12,8 +12,9 @@
 //    consultas que mais leem blocos, segundo a pg_stat_statements, são as
 //    das investigações, na ordem esperada.
 // 5. Para cada investigação de plano, numa transação desfeita no fim (ROLLBACK):
-//    confere como a consulta acessa a tabela investigada antes da correção,
-//    aplica a correção, confere o acesso de novo e confere que o resultado
+//    confere como a consulta acessa a tabela investigada antes da correção
+//    (e, quando a investigação pede, o join e a estimativa de linhas),
+//    aplica a correção, confere o plano de novo e confere que o resultado
 //    da consulta não mudou. Tempos não são conferidos: variam de máquina
 //    para máquina e deixariam a CI instável. Na investigação de bloqueio
 //    (04), confere com várias conexões o que acontece com as escritas da
@@ -25,7 +26,9 @@ const crypto = require('node:crypto');
 const { Client } = require('pg');
 const { lerSql, comPostgresEmbarcado, executar } = require('./postgres-embarcado');
 const { CARGA, executarCarga } = require('./carga');
-const { INVESTIGACOES, lerInvestigacao, linhasLidas, acessoDaConsulta } = require('./investigacoes');
+const {
+  INVESTIGACOES, lerInvestigacao, descreverAcesso, linhasLidas, juncaoDaTabela, estimativaDaTabela,
+} = require('./investigacoes');
 
 // Triagem: as três consultas que mais leem blocos durante a carga simulada,
 // em ordem. Blocos lidos (shared_blks_hit + shared_blks_read) dependem dos
@@ -109,13 +112,28 @@ const COERENCIA = [
   },
 ];
 
-// Confere o acesso à tabela e, se houver valor esperado, as linhas lidas
-// (este último executa a consulta, com EXPLAIN ANALYZE).
-async function conferirPlano(client, rotulo, consulta, tabela, acessoEsperado, linhasEsperadas) {
-  conferir(`${rotulo}: acesso a ${tabela}`, acessoEsperado, await acessoDaConsulta(client, consulta, tabela));
-  if (linhasEsperadas !== undefined) {
-    const r = await client.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${consulta}`);
-    conferir(`${rotulo}: linhas lidas de ${tabela}`, linhasEsperadas, linhasLidas(r.rows[0]['QUERY PLAN'][0].Plan, tabela));
+// Confere o plano de um cenário ('Antes', 'Tentativa' ou 'Depois') com o
+// que a investigação espera: sempre o acesso à tabela e, se houver valor
+// esperado, o join e, executando a consulta (EXPLAIN ANALYZE), as linhas
+// lidas e a estimativa.
+async function conferirPlano(client, rotulo, consulta, inv, cenario) {
+  const { tabela } = inv;
+  const esperado = (campo) => inv[`${campo}${cenario}`];
+  const r = await client.query(`EXPLAIN (FORMAT JSON) ${consulta}`);
+  const plano = r.rows[0]['QUERY PLAN'][0].Plan;
+  conferir(`${rotulo}: acesso a ${tabela}`, esperado('acesso'), descreverAcesso(plano, tabela));
+  if (esperado('juncao') !== undefined) {
+    conferir(`${rotulo}: join que recebe ${tabela}`, esperado('juncao'), juncaoDaTabela(plano, tabela));
+  }
+  if (esperado('linhas') !== undefined || esperado('estimativa') !== undefined) {
+    const ra = await client.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${consulta}`);
+    const planoExecutado = ra.rows[0]['QUERY PLAN'][0].Plan;
+    if (esperado('linhas') !== undefined) {
+      conferir(`${rotulo}: linhas lidas de ${tabela}`, esperado('linhas'), linhasLidas(planoExecutado, tabela));
+    }
+    if (esperado('estimativa') !== undefined) {
+      conferir(`${rotulo}: estimativa de linhas de ${tabela}`, esperado('estimativa'), estimativaDaTabela(planoExecutado, tabela));
+    }
   }
 }
 
@@ -370,22 +388,21 @@ async function main() {
       const consultaDepois = inv.consultaCorrigida ? lerInvestigacao(inv.pasta, 'consulta-corrigida.sql') : consulta;
       await client.query('BEGIN');
       try {
-        await conferirPlano(client, `${inv.pasta}: antes da correção`, consulta, inv.tabela,
-          inv.acessoAntes, inv.linhasAntes);
+        if (inv.cenario) await client.query(lerInvestigacao(inv.pasta, 'cenario.sql'));
+        await conferirPlano(client, `${inv.pasta}: antes da correção`, consulta, inv, 'Antes');
         const antes = await client.query(consulta);
 
         if (inv.acessoTentativa) {
           await client.query('SAVEPOINT tentativa');
           await client.query(lerInvestigacao(inv.pasta, 'tentativa.sql'));
-          await conferirPlano(client, `${inv.pasta}: com a tentativa anterior ao chamado`, consulta, inv.tabela,
-            inv.acessoTentativa, inv.linhasTentativa);
+          await conferirPlano(client, `${inv.pasta}: com a tentativa anterior ao chamado`, consulta, inv, 'Tentativa');
           await client.query('ROLLBACK TO SAVEPOINT tentativa');
         }
 
         await client.query(lerInvestigacao(inv.pasta, 'correcao.sql'));
 
         await conferirPlano(client, `${inv.pasta}: depois da correção${inv.consultaCorrigida ? ' (consulta corrigida)' : ''}`,
-          consultaDepois, inv.tabela, inv.acessoDepois, inv.linhasDepois);
+          consultaDepois, inv, 'Depois');
         const depois = await client.query(consultaDepois);
 
         // A correção não pode mudar o que a consulta devolve. O número de
