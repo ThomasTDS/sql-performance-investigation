@@ -1,4 +1,4 @@
-// Mede as investigações de plano (01 a 03 e 05) e grava investigacoes/MEDICOES.md:
+// Mede as investigações de plano (01 a 03, 05 e 06) e grava investigacoes/MEDICOES.md:
 // para cada cenário (antes, tentativa, depois), o plano, as linhas lidas, os
 // buffers e o tempo de execução (mediana e faixa de várias execuções).
 //

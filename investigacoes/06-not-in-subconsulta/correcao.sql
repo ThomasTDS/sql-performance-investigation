@@ -1,0 +1,9 @@
+-- Correção: nenhuma mudança no banco. A correção é a reescrita da consulta,
+-- em consulta-corrigida.sql (NOT EXISTS no lugar de NOT IN).
+--
+-- O índice da tentativa (pagamentos.pedido_id) não faz parte da correção: a
+-- consulta reescrita já é rápida sem ele. Ele fica como recomendação à
+-- parte (ver a seção 6 do README).
+--
+-- Este arquivo só tem comentários: a validação o executa como as outras
+-- correções, e ele não muda nada.
