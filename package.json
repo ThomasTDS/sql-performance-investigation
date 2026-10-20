@@ -1,6 +1,6 @@
 {
   "name": "sql-performance-investigation",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Investigação de performance de consultas SQL num PostgreSQL com volume realista de dados, usando planos de execução como evidência.",
   "scripts": {
