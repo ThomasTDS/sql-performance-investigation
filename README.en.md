@@ -126,6 +126,8 @@ The script starts a temporary PostgreSQL 16 (port `5433`), runs the checks in fi
 4. **Triage:** runs the simulated workload and checks that the three queries that read the most blocks, according to `pg_stat_statements`, are the ones from the investigations.
 5. **Investigations:** the plan before and after each fix, and an identical result.
 
+Each check is shown with ✔ or ✘. At the end, a summary shows how many checks each stage and each investigation has and how many passed (the same summary appears at the top of the CI run).
+
 The full run takes a little over 1 minute, most of it generating the data and running the slow query from investigation 06 (about 10 seconds).
 
 > **Why the `C` locale?** The locale changes execution plans: with a locale other than `C`, for example, a regular B-tree index does not serve `LIKE 'abc%'`. That is why the embedded database and the Docker one are created with `UTF8` and the `C` locale, so the plans are the same on any machine. On Windows, if the project is in a folder with accented characters, the script automatically works around an `initdb` limitation with such paths.

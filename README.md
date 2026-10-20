@@ -124,6 +124,8 @@ O script sobe um PostgreSQL 16 temporário (porta `5433`), executa as verificaç
 4. **Triagem:** executa a carga simulada e confere que as três consultas que mais leem blocos, segundo a `pg_stat_statements`, são as das investigações.
 5. **Investigações:** plano antes e depois de cada correção e resultado idêntico.
 
+Cada conferência aparece com ✔ ou ✘. No fim, um resumo mostra quantas conferências cada etapa e cada investigação tem e quantas passaram (o mesmo resumo aparece no topo da execução da CI).
+
 A execução completa leva um pouco mais de 1 minuto, a maior parte na geração do volume e na consulta lenta da investigação 06 (cerca de 10 segundos).
 
 > **Por que locale `C`?** O locale muda planos de execução: com um locale diferente de `C`, por exemplo, um índice B-tree comum não atende `LIKE 'abc%'`. Por isso, o banco embarcado e o do Docker são criados com `UTF8` e locale `C`, e os planos ficam iguais em qualquer máquina. No Windows, se o projeto estiver numa pasta com acento, o script contorna automaticamente uma limitação do `initdb` com esses caminhos.
