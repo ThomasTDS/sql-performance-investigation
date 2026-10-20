@@ -158,6 +158,36 @@ function conferir(label, esperado, encontrado) {
 // No GitHub Actions, GITHUB_STEP_SUMMARY aponta para um arquivo cujo
 // conteúdo (Markdown) aparece na página da execução. Fora do Actions a
 // variável não existe e nada é escrito.
+// Agrupa as conferências: as das investigações pela pasta (o rótulo começa
+// com ela, ex.: "05-estatisticas-desatualizadas: ..."), as da triagem como
+// investigação 00 e as demais pela etapa (ambiente, schema, volume). As
+// etapas vêm primeiro, na ordem em que rodam, e depois as investigações,
+// em ordem numérica (a 05 roda depois da 07, mas aparece antes).
+function resumoPorGrupo() {
+  const grupos = new Map();
+  for (const r of resultados) {
+    const pasta = /^(\d\d-[a-z0-9-]+):/.exec(r.label);
+    const grupo = pasta ? pasta[1] : r.etapa === 'triagem' ? '00-triagem' : `etapa: ${r.etapa}`;
+    const g = grupos.get(grupo) || { grupo, total: 0, ok: 0 };
+    g.total += 1;
+    if (r.ok) g.ok += 1;
+    grupos.set(grupo, g);
+  }
+  const lista = [...grupos.values()];
+  const etapas = lista.filter((g) => g.grupo.startsWith('etapa: '));
+  const investigacoes = lista.filter((g) => !g.grupo.startsWith('etapa: ')).sort((a, b) => a.grupo.localeCompare(b.grupo));
+  return [...etapas, ...investigacoes];
+}
+
+function imprimirResumo() {
+  console.log('\n--- Resumo por investigação ---');
+  for (const g of resumoPorGrupo()) {
+    console.log(`  ${g.ok === g.total ? '✔' : '✘'} ${g.grupo.padEnd(34)} ${String(g.ok).padStart(2)}/${g.total}`);
+  }
+  const ok = resultados.filter((r) => r.ok).length;
+  console.log(`  ${'Total'.padEnd(36)} ${String(ok).padStart(2)}/${resultados.length}`);
+}
+
 function escreverResumoCi() {
   const arquivo = process.env.GITHUB_STEP_SUMMARY;
   if (!arquivo) return;
@@ -168,9 +198,17 @@ function escreverResumoCi() {
     '',
     `**${okCount}/${resultados.length} conferências OK**${okCount === resultados.length ? '' : ' — ver os itens marcados com ❌'}`,
     '',
+    '| Investigação ou etapa | Conferências OK | |',
+    '|---|---:|---|',
+    ...resumoPorGrupo().map((g) => `| ${g.grupo} | ${g.ok}/${g.total} | ${g.ok === g.total ? '✅' : '❌'} |`),
+    '',
+    '<details><summary>Todas as conferências</summary>',
+    '',
     '| Etapa | Conferência | Esperado | Encontrado | |',
     '|---|---|---|---|---|',
     ...resultados.map((r) => `| ${r.etapa} | ${r.label} | ${r.esperado} | ${r.encontrado} | ${r.ok ? '✅' : '❌'} |`),
+    '',
+    '</details>',
     '',
   ];
   fs.appendFileSync(arquivo, linhas.join('\n') + '\n');
@@ -475,6 +513,7 @@ async function main() {
     await verificarInchaco(client);
   });
 
+  imprimirResumo();
   escreverResumoCi();
 
   if (process.exitCode === 1) {
