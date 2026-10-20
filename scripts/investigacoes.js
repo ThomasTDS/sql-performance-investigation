@@ -1,4 +1,4 @@
-// Investigações de plano (01 a 03 e 05): a configuração que diz o que esperar
+// Investigações de plano (01 a 03, 05 e 06): a configuração que diz o que esperar
 // de cada uma e as funções que leem os planos de execução. Usado pela
 // validação (validate.js) e pelas medições (medir.js).
 
@@ -53,6 +53,21 @@ const INVESTIGACOES = [
     acessoDepois: 'Index Scan usando idx_pedidos_data_id',
     linhasDepois: 20,
   },
+  {
+    pasta: '06-not-in-subconsulta',
+    tabela: 'pagamentos',
+    consultaCorrigida: true,
+    acessoAntes: 'Seq Scan',
+    juncaoAntes: 'SubPlan',
+    acessoTentativa: 'Seq Scan',
+    juncaoTentativa: 'SubPlan',
+    acessoDepois: 'Seq Scan',
+    juncaoDepois: 'Hash Join (Anti)',
+  },
+  // A 05 fica por último: o cenário dela (uma importação desfeita com
+  // ROLLBACK) deixa versões mortas em pedidos, itens_pedido e pagamentos, e o
+  // ANALYZE dela grava pg_class.reltuples sem ser desfeito. Uma investigação
+  // que rode depois dela leria tabelas maiores que as do volume base.
   {
     pasta: '05-estatisticas-desatualizadas',
     tabela: 'pedidos',
@@ -109,11 +124,20 @@ function linhasLidas(plano, tabela) {
 // que não são join (Gather, Hash, Sort...) são ignorados.
 const JUNCOES = ['Nested Loop', 'Hash Join', 'Merge Join'];
 
+// O join aparece com o tipo quando não é o comum (Inner), por exemplo
+// 'Hash Join (Anti)' num NOT EXISTS. Uma tabela lida dentro de uma
+// subconsulta que não virou join aparece como 'SubPlan' (ou 'hashed
+// SubPlan', quando a subconsulta inteira é guardada numa tabela hash).
 function juncaoDaTabela(plano, tabela) {
   const juncoes = [];
   const visitar = (no, juncaoAcima) => {
-    if (no['Relation Name'] === tabela) juncoes.push(juncaoAcima || '(sem join)');
-    const juncao = JUNCOES.includes(no['Node Type']) ? no['Node Type'] : juncaoAcima;
+    let atual = juncaoAcima;
+    if (no['Parent Relationship'] === 'SubPlan') {
+      atual = /^hashed /.test(no['Subplan Name'] || '') ? 'hashed SubPlan' : 'SubPlan';
+    }
+    if (no['Relation Name'] === tabela) juncoes.push(atual || '(sem join)');
+    const tipo = no['Join Type'] && no['Join Type'] !== 'Inner' ? ` (${no['Join Type']})` : '';
+    const juncao = JUNCOES.includes(no['Node Type']) ? `${no['Node Type']}${tipo}` : atual;
     (no.Plans || []).forEach((filho) => visitar(filho, juncao));
   };
   visitar(plano, null);

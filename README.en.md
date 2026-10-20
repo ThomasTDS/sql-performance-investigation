@@ -22,8 +22,9 @@ It follows the [sql-defect-investigation](https://github.com/ThomasTDS/sql-defec
 - **Reading execution plans** (`EXPLAIN (ANALYZE, BUFFERS)`) as evidence for each hypothesis, including to rule hypotheses out.
 - **Three classic causes of slowness:** a foreign key without an index, an index ignored because of a function on the column, and pagination with a large `OFFSET`. The fixes include a regular index, an expression index and keyset pagination.
 - **Stale statistics:** after a data import, the planner estimates 1 row where there are 38 thousand and picks the wrong join. The investigation shows why autovacuum did not fix it on its own and why an index would hide the problem without solving it.
+- **A slow query that may also be wrong:** a `NOT IN` with a subquery takes almost 10 s and does not use the index created for it. The `NOT EXISTS` rewrite takes 80 ms, but it is only equivalent because the column does not accept nulls; with nulls, `NOT IN` returns zero rows without any warning.
 - **The risk of the fix itself:** a locking investigation shows, with several concurrent sessions, why a `CREATE INDEX` in production blocks writes, and what the pitfalls of `CONCURRENTLY` are.
-- **Fixes that "did not work" are documented too:** in two investigations, the team had already created an index that did not help, and the report explains why.
+- **Fixes that "did not work" are documented too:** in three investigations, the team had already created an index that did not help, and the report explains why.
 - **Automated, deterministic verification:** the CI does not check timings, which vary from machine to machine. It checks the shape of the plan, the number of rows read, and that the fix does not change the query result.
 - **Reproducible dataset:** 2.5 million rows generated with a fixed seed, checked by `md5` on Windows, on Linux and in Docker.
 
@@ -31,7 +32,7 @@ It follows the [sql-defect-investigation](https://github.com/ThomasTDS/sql-defec
 
 ## Investigations
 
-[Investigation 00 (triage)](investigacoes/00-triagem/README.md) is the starting point: with a simulated application workload and the `pg_stat_statements` extension, it shows which queries weigh the most on the database. The top three of the ranking are investigations 01 to 03. Investigation 04 deals with the risk of applying one of those fixes in production, and 05 with a report that became slow after a data import:
+[Investigation 00 (triage)](investigacoes/00-triagem/README.md) is the starting point: with a simulated application workload and the `pg_stat_statements` extension, it shows which queries weigh the most on the database. The top three of the ranking are investigations 01 to 03. Investigation 04 deals with the risk of applying one of those fixes in production, 05 with a report that became slow after a data import, and 06 with a dashboard that depends on the shape of the query, not on an index:
 
 | # | Investigation | Symptom | Root cause | Before → after |
 |---|---|---|---|---|
@@ -40,6 +41,7 @@ It follows the [sql-defect-investigation](https://github.com/ThomasTDS/sql-defec
 | 03 | [Pagination with a large OFFSET](investigacoes/03-paginacao-offset/README.md) | The first pages of the order list are instant, but the last ones are slow, even with an index | `OFFSET` reads and discards every row before the page | 400,500 rows read (~660 ms) → 20 rows (~0.08 ms), with keyset pagination |
 | 04 | [Locking caused by CREATE INDEX](investigacoes/04-bloqueio-create-index/README.md) | Order writes stopped during the migration that applied the fix from investigation 01 | A regular `CREATE INDEX` holds a `ShareLock`, which blocks `INSERT`, `UPDATE` and `DELETE` | Writes blocked → writes allowed, with `CONCURRENTLY` (and its pitfalls) |
 | 05 | [Stale statistics after a data import](investigacoes/05-estatisticas-desatualizadas/README.md) | The January sales-by-team report takes almost 1 s; the December one, ~70 ms | The statistics do not know about the 40 thousand imported orders: the planner estimates 1 row and picks a `Nested Loop` | `Nested Loop` ~960 ms → `Hash Join` ~67 ms, with `ANALYZE` |
+| 06 | [NOT IN with a subquery](investigacoes/06-not-in-subconsulta/README.md) | The "today's orders without payment" dashboard takes almost 10 s, even after an index was created | `NOT IN` does not become a join: the list of 487 thousand payments is scanned for each order of the day, and the index is not used | `SubPlan` ~9.7 s → `Hash Anti Join` ~80 ms, with `NOT EXISTS` |
 
 Each investigation lives in its own folder, with:
 
@@ -59,7 +61,7 @@ For each investigation, the validation opens a transaction and:
 4. checks that the **result** is exactly the same before and after;
 5. undoes everything with `ROLLBACK`, so the base schema stays without the indexes.
 
-When the access type is not enough to tell the scenarios apart (for example, two `Index Scan`s on the same index), the validation also checks how many rows of the table the plan read. Unlike timing, this number is deterministic. When the fix changes the join rather than the table access (investigation 05), it checks the join type and whether the planner's row estimate is right or wrong. The timings quoted in the reports are illustrative: they vary from machine to machine and, for that reason, are not checked.
+When the access type is not enough to tell the scenarios apart (for example, two `Index Scan`s on the same index), the validation also checks how many rows of the table the plan read. Unlike timing, this number is deterministic. When the fix changes the join rather than the table access, it checks the join type: `Nested Loop` → `Hash Join` in investigation 05, where it also checks whether the planner's row estimate is right or wrong, and subquery (`SubPlan`) → an `Anti` `Hash Join` in 06. The timings quoted in the reports are illustrative: they vary from machine to machine and, for that reason, are not checked.
 
 Investigation 04 (locking) has its own format: `migracao.sql` (the migration), `migracao-corrigida.sql` (the fixed migration) and an `exploracao.sql` with diagnostic queries for an observer terminal. The validation opens several connections and checks what happens to the application's writes while the migration runs (blocked or allowed), as well as the state of the index at the end.
 
@@ -119,7 +121,7 @@ The script starts a temporary PostgreSQL 16 (port `5433`), runs the checks in fi
 4. **Triage:** runs the simulated workload and checks that the three queries that read the most blocks, according to `pg_stat_statements`, are the ones from the investigations.
 5. **Investigations:** the plan before and after each fix, and an identical result.
 
-The full run takes about 40 seconds, most of it generating the data.
+The full run takes a little over 1 minute, most of it generating the data and running the slow query from investigation 06 (about 10 seconds).
 
 > **Why the `C` locale?** The locale changes execution plans: with a locale other than `C`, for example, a regular B-tree index does not serve `LIKE 'abc%'`. That is why the embedded database and the Docker one are created with `UTF8` and the `C` locale, so the plans are the same on any machine. On Windows, if the project is in a folder with accented characters, the script automatically works around an `initdb` limitation with such paths.
 
@@ -164,7 +166,7 @@ Resets the `pg_stat_statements` statistics, runs the simulated application workl
 npm run medir
 ```
 
-Measures each scenario of investigations 01 to 03 and 05 (before, attempted fix and after: median of 5 runs, rows read and buffers) and writes [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), with the date, operating system, CPU and PostgreSQL version. The timings quoted in the reports are approximate. That file is the standardized record, and to update it you just run the script again.
+Measures each scenario of investigations 01 to 03, 05 and 06 (before, attempted fix and after: median of 5 runs, or of 3 for queries that take over 5 s, rows read and buffers) and writes [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), with the date, operating system, CPU and PostgreSQL version. The timings quoted in the reports are approximate. That file is the standardized record, and to update it you just run the script again.
 
 ## Continuous integration
 
@@ -172,7 +174,7 @@ On every pull request and every push to `main`, GitHub Actions runs:
 
 - **Validação (Postgres embarcado)** (validation, embedded Postgres): `npm ci` and `npm run validate`, on Linux. Then `npm run medir` shows the measurements table in the run summary, as a reference from a standardized Linux machine. The timings are not checked.
 - **Docker Compose:** starts the database from `docker-compose.yml` and checks the encoding, the locale, the `VACUUM` and, for each table, the row count and the `md5`. Then it runs every `exploracao.sql` with `psql -v ON_ERROR_STOP=1` and runs `npm run triagem` on the container's database. If any query from a report fails, the job fails.
-- **PostgreSQL 17 and 18 (informativo)** (informational): the same validation, with the embedded PostgreSQL in versions 17 and 18, to show what would change in an upgrade. These two jobs do not block merging. Today, all 59 checks pass on the three versions: the plans, the rows read, the triage ranking and the locking behavior are the same.
+- **PostgreSQL 17 and 18 (informativo)** (informational): the same validation, with the embedded PostgreSQL in versions 17 and 18, to show what would change in an upgrade. These two jobs do not block merging. Today, all 66 checks pass on the three versions: the plans, the rows read, the triage ranking and the locking behavior are the same.
 
 The jobs compare the data with the same expected values, originally generated on Windows. That way, the CI guarantees that the dataset is identical on Linux, in the container and in the other PostgreSQL versions. The result of each check appears in the run summary, in the **Actions** tab.
 
@@ -191,6 +193,7 @@ The jobs compare the data with the same expected values, originally generated on
 │   ├── 03-paginacao-offset/   # same, plus the rewritten query
 │   ├── 04-bloqueio-create-index/  # migration, fixed migration and lock diagnostics
 │   ├── 05-estatisticas-desatualizadas/  # report, scenario (import), query, exploration and fix
+│   ├── 06-not-in-subconsulta/ # report, query, attempt, exploration and rewritten query
 │   └── MEDICOES.md            # measured timings (generated by npm run medir)
 ├── package.json
 ├── scripts/
