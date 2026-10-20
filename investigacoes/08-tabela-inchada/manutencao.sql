@@ -1,0 +1,11 @@
+-- Correção, parte 2 de 2: devolver ao disco o espaço que o job antigo
+-- deixou para trás. Roda uma única vez, numa janela de manutenção.
+--
+-- O VACUUM FULL reescreve a tabela inteira num arquivo novo, só com as
+-- linhas vivas, e recria os índices. Enquanto roda, segura um
+-- ACCESS EXCLUSIVE na tabela: nenhuma leitura nem escrita passa (ver a
+-- investigação 04 sobre bloqueios). Também precisa de espaço livre em
+-- disco para a cópia nova.
+--
+-- Não pode rodar dentro de uma transação (BEGIN).
+VACUUM FULL pedidos;
