@@ -164,7 +164,7 @@ Zera as estatísticas da `pg_stat_statements`, executa a carga simulada da aplic
 npm run medir
 ```
 
-Mede cada cenário das investigações 01 a 03, 05 e 06 (antes, tentativa e depois: mediana de 5 execuções, linhas lidas e buffers) e grava [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), com a data, o sistema, a CPU e a versão do PostgreSQL. Os tempos citados nos relatórios são aproximados. Esse arquivo é o registro padronizado, e para atualizá-lo basta rodar o script de novo.
+Mede cada cenário das investigações 01 a 03, 05 e 06 (antes, tentativa e depois: mediana de 5 execuções, ou de 3 nas consultas que passam de 5 s, linhas lidas e buffers) e grava [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), com a data, o sistema, a CPU e a versão do PostgreSQL. Os tempos citados nos relatórios são aproximados. Esse arquivo é o registro padronizado, e para atualizá-lo basta rodar o script de novo.
 
 ## Integração contínua
 

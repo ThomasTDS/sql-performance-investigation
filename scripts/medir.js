@@ -26,14 +26,21 @@ const numero = (n, casas = 0) => n.toLocaleString('pt-BR', { minimumFractionDigi
 const ms = (t) => `${numero(t, t < 1 ? 3 : t < 10 ? 2 : 1)} ms`;
 
 // Uma execução descartada (aquece o cache) e depois EXECUCOES medidas.
+// Consultas lentas (a primeira execução acima de LENTA_MS) seguem outra
+// regra: a primeira execução já conta, e são só EXECUCOES_LENTA medidas. O
+// aquecimento não muda nada para elas (o tempo é de processamento, não de
+// leitura do disco), e 5 execuções de 20 s deixariam a CI minutos mais lenta.
+const LENTA_MS = 5000;
+const EXECUCOES_LENTA = 3;
+
 async function medirConsulta(client, consulta, { tabela, juncaoAntes }) {
   const acesso = await acessoDaConsulta(client, consulta, tabela);
-  await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${consulta}`);
-  const tempos = [];
-  let plano;
-  for (let i = 0; i < EXECUCOES; i++) {
-    const r = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${consulta}`);
-    plano = r.rows[0]['QUERY PLAN'][0];
+  const executar = async () => (await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${consulta}`)).rows[0]['QUERY PLAN'][0];
+  let plano = await executar();
+  const lenta = plano['Execution Time'] > LENTA_MS;
+  const tempos = lenta ? [plano['Execution Time']] : [];
+  while (tempos.length < (lenta ? EXECUCOES_LENTA : EXECUCOES)) {
+    plano = await executar();
     tempos.push(plano['Execution Time']);
   }
   tempos.sort((a, b) => a - b);
@@ -45,6 +52,7 @@ async function medirConsulta(client, consulta, { tabela, juncaoAntes }) {
     mediana: tempos[Math.floor(tempos.length / 2)],
     minimo: tempos[0],
     maximo: tempos[tempos.length - 1],
+    execucoes: tempos.length,
   };
 }
 
@@ -81,14 +89,14 @@ function gerarMarkdown(ambiente, resultados) {
     `- **CPU:** ${ambiente.cpu}`,
     `- **PostgreSQL:** ${ambiente.postgres} (embarcado) · **Node.js:** ${ambiente.node}`,
     '',
-    `Cada tempo é a mediana de ${EXECUCOES} execuções com \`EXPLAIN (ANALYZE, BUFFERS)\`, depois de uma execução descartada para aquecer o cache. A faixa mostra o menor e o maior tempo. Linhas lidas e buffers são da tabela investigada e da consulta inteira, respectivamente, e quase não variam entre máquinas. Os tempos variam: numa mesma máquina, já foram observadas diferenças de até 5 vezes entre sessões.`,
+    `Cada tempo é a mediana de ${EXECUCOES} execuções com \`EXPLAIN (ANALYZE, BUFFERS)\`, depois de uma execução descartada para aquecer o cache. Consultas em que a primeira execução passa de ${numero(LENTA_MS / 1000)} s são medidas só ${EXECUCOES_LENTA} vezes, sem descartar nenhuma: para elas, o aquecimento não muda o tempo. A coluna "Execuções" mostra quantas foram usadas. A faixa mostra o menor e o maior tempo. Linhas lidas e buffers são da tabela investigada e da consulta inteira, respectivamente, e quase não variam entre máquinas. Os tempos variam: numa mesma máquina, já foram observadas diferenças de até 5 vezes entre sessões.`,
     '',
-    '| Investigação | Cenário | Acesso à tabela (→ join) | Linhas lidas | Buffers | Tempo (mediana) | Faixa |',
-    '|---|---|---|---:|---:|---:|---|',
+    '| Investigação | Cenário | Acesso à tabela (→ join) | Linhas lidas | Buffers | Tempo (mediana) | Faixa | Execuções |',
+    '|---|---|---|---:|---:|---:|---|---:|',
   ];
   for (const { inv, cenarios } of resultados) {
     for (const c of cenarios) {
-      linhas.push(`| [${inv.pasta}](${inv.pasta}/README.md) | ${c.nome} | \`${c.acesso}\` | ${numero(c.linhas)} | ${numero(c.buffers)} | ${ms(c.mediana)} | ${ms(c.minimo)} a ${ms(c.maximo)} |`);
+      linhas.push(`| [${inv.pasta}](${inv.pasta}/README.md) | ${c.nome} | \`${c.acesso}\` | ${numero(c.linhas)} | ${numero(c.buffers)} | ${ms(c.mediana)} | ${ms(c.minimo)} a ${ms(c.maximo)} | ${c.execucoes} |`);
     }
   }
   linhas.push('');

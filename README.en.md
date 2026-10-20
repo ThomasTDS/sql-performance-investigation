@@ -166,7 +166,7 @@ Resets the `pg_stat_statements` statistics, runs the simulated application workl
 npm run medir
 ```
 
-Measures each scenario of investigations 01 to 03, 05 and 06 (before, attempted fix and after: median of 5 runs, rows read and buffers) and writes [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), with the date, operating system, CPU and PostgreSQL version. The timings quoted in the reports are approximate. That file is the standardized record, and to update it you just run the script again.
+Measures each scenario of investigations 01 to 03, 05 and 06 (before, attempted fix and after: median of 5 runs, or of 3 for queries that take over 5 s, rows read and buffers) and writes [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), with the date, operating system, CPU and PostgreSQL version. The timings quoted in the reports are approximate. That file is the standardized record, and to update it you just run the script again.
 
 ## Continuous integration
 
