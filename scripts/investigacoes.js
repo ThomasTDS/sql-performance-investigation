@@ -1,4 +1,4 @@
-// Investigações de plano (01 a 03, 05 e 06): a configuração que diz o que esperar
+// Investigações de plano (01 a 03 e 05 a 07): a configuração que diz o que esperar
 // de cada uma e as funções que leem os planos de execução. Usado pela
 // validação (validate.js) e pelas medições (medir.js).
 
@@ -63,6 +63,13 @@ const INVESTIGACOES = [
     juncaoTentativa: 'SubPlan',
     acessoDepois: 'Seq Scan',
     juncaoDepois: 'Hash Join (Anti)',
+  },
+  {
+    pasta: '07-busca-por-trecho',
+    tabela: 'clientes',
+    acessoAntes: 'Seq Scan',
+    acessoTentativa: 'Seq Scan',
+    acessoDepois: 'Bitmap Heap Scan usando idx_clientes_telefone_trgm',
   },
   // A 05 fica por último: o cenário dela (uma importação desfeita com
   // ROLLBACK) deixa versões mortas em pedidos, itens_pedido e pagamentos, e o
