@@ -147,9 +147,9 @@ O `npm run validate` (e a CI) repete esta investigação a cada execução, por 
 3. roda um `VACUUM` e confere que a tabela **continua** com cerca do dobro;
 4. roda o job antigo de novo e confere que a tabela continua com cerca do dobro (reaproveitou o espaço);
 5. roda o [`job-corrigido.sql`](job-corrigido.sql) e confere que ele grava **0 linhas**;
-6. roda o [`manutencao.sql`](manutencao.sql) e confere que a tabela volta **exatamente** ao tamanho base, com o **mesmo `md5`** dos dados conferido na validação do volume.
+6. roda o [`manutencao.sql`](manutencao.sql) e confere que a tabela volta ao tamanho base (com 1% de folga: no PostgreSQL 18, ela fica com uma página a mais) e com o **mesmo `md5`** dos dados conferido na validação do volume.
 
-O tamanho depois do job é conferido como proporção, e não em páginas exatas, para não depender de detalhes de cada versão do PostgreSQL.
+O tamanho é sempre conferido como proporção do volume base, e não em páginas exatas, para não depender de detalhes de cada versão do PostgreSQL.
 
 ## 6. Recomendações
 

@@ -306,8 +306,10 @@ async function verificarBloqueio(observador) {
 // então esta verificação grava as mudanças de verdade e roda por último. No
 // fim, o VACUUM FULL devolve a tabela ao tamanho do volume base, com os
 // mesmos dados (md5), e um VACUUM comum refaz o mapa de visibilidade.
-// O tamanho é conferido em proporção ao volume base ("cerca do dobro"), e
-// não em páginas exatas, para não depender de detalhes de cada versão.
+// O tamanho é conferido em proporção ao volume base ("cerca do dobro", "o
+// mesmo tamanho", com 1% de folga), e não em páginas exatas, para não
+// depender de detalhes de cada versão: no PostgreSQL 18, o VACUUM FULL
+// deixa a tabela com 4.208 páginas, uma a mais que no 16.
 const INCHACO_PASTA = '08-tabela-inchada';
 // Preenchido na etapa 3, logo depois da carga do volume.
 let PAGINAS_PEDIDOS_BASE;
@@ -317,7 +319,9 @@ async function verificarInchaco(client) {
   const paginas = async () => Number((await client.query("SELECT pg_relation_size('pedidos') / 8192 AS p")).rows[0].p);
   const proporcao = (atual, base) => {
     const p = atual / base;
-    return p >= 1.9 && p <= 2.1 ? 'cerca do dobro' : `${p.toFixed(2)} vezes`;
+    if (p >= 1.9 && p <= 2.1) return 'cerca do dobro';
+    if (p >= 0.99 && p <= 1.01) return 'o mesmo tamanho';
+    return `${p.toFixed(3)} vezes`;
   };
   const md5Pedidos = async () =>
     (await client.query("SELECT md5(string_agg(t::text, '|' ORDER BY id)) AS md5 FROM pedidos AS t")).rows[0].md5;
@@ -343,7 +347,7 @@ async function verificarInchaco(client) {
   conferir(rotulo('job corrigido: linhas gravadas'), 0, jobCorrigido.rowCount);
 
   await client.query(lerInvestigacao(INCHACO_PASTA, 'manutencao.sql'));
-  conferir(rotulo('depois do VACUUM FULL: páginas de pedidos'), base, await paginas());
+  conferir(rotulo('depois do VACUUM FULL: tamanho de pedidos'), 'o mesmo tamanho', proporcao(await paginas(), base));
   conferir(rotulo('depois do VACUUM FULL: dados de pedidos (md5)'), VOLUME_ESPERADO.pedidos.md5, await md5Pedidos());
   await client.query('VACUUM pedidos');
 }
