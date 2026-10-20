@@ -18,11 +18,11 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 - **Triagem antes da otimização:** uma carga simulada da aplicação e a `pg_stat_statements` mostram quais consultas mais pesam no banco. As três do topo viram as investigações.
 - **Leitura de planos de execução** (`EXPLAIN (ANALYZE, BUFFERS)`) como evidência de cada hipótese, inclusive para descartá-las.
-- **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*).
+- **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*). Uma quarta investigação trata da busca por trecho do texto (`LIKE '%...'`), com um índice de trigramas (GIN).
 - **Estatísticas desatualizadas:** depois de uma importação, o planejador estima 1 linha onde há 38 mil e escolhe o join errado. A investigação mostra por que o autovacuum não corrigiu sozinho e por que um índice esconderia o problema sem resolvê-lo.
 - **Uma consulta lenta que também pode estar errada:** um `NOT IN` com subconsulta leva quase 10 s e não usa o índice criado para ele. A reescrita com `NOT EXISTS` leva 80 ms, mas só é equivalente porque a coluna não aceita nulos; com nulos, o `NOT IN` devolve zero linhas sem nenhum aviso.
 - **O risco da própria correção:** uma investigação de bloqueio mostra, com várias sessões simultâneas, por que um `CREATE INDEX` em produção trava as escritas e quais são as armadilhas do `CONCURRENTLY`.
-- **Correções que "não deram certo" também documentadas:** em três investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
+- **Correções que "não deram certo" também documentadas:** em quatro investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
 - **Verificação automatizada e determinística:** a CI não confere tempos, que variam de máquina para máquina. Ela confere o formato do plano, a quantidade de linhas lidas e que a correção não muda o resultado da consulta.
 - **Massa de dados reprodutível:** 2,5 milhões de linhas geradas com semente fixa, conferidas por `md5` no Windows, no Linux e em Docker.
 
@@ -30,7 +30,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ## Investigações
 
-A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto de partida: com uma carga simulada da aplicação e a extensão `pg_stat_statements`, ela mostra quais consultas mais pesam no banco. As três do topo do ranking são as investigações 01 a 03. A 04 trata do risco de aplicar uma dessas correções em produção, a 05, de um relatório que ficou lento depois de uma importação de dados, e a 06, de um painel que depende da forma da consulta, e não de um índice:
+A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto de partida: com uma carga simulada da aplicação e a extensão `pg_stat_statements`, ela mostra quais consultas mais pesam no banco. As três do topo do ranking são as investigações 01 a 03. A 04 trata do risco de aplicar uma dessas correções em produção, a 05, de um relatório que ficou lento depois de uma importação de dados, a 06, de um painel que depende da forma da consulta, e não de um índice, e a 07, de uma busca por trecho que o índice comum não atende:
 
 | # | Investigação | Sintoma | Causa raiz | Antes → depois |
 |---|---|---|---|---|
@@ -40,6 +40,7 @@ A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto d
 | 04 | [Bloqueio causado pelo CREATE INDEX](investigacoes/04-bloqueio-create-index/README.md) | A gravação de pedidos parou durante a migração que aplicava a correção da investigação 01 | `CREATE INDEX` comum segura um `ShareLock`, que bloqueia `INSERT`, `UPDATE` e `DELETE` | Escrita bloqueada → escrita liberada, com `CONCURRENTLY` (e as armadilhas dele) |
 | 05 | [Estatísticas desatualizadas depois de uma importação](investigacoes/05-estatisticas-desatualizadas/README.md) | O relatório de vendas por equipe de janeiro leva quase 1 s; o de dezembro, ~70 ms | As estatísticas não conhecem os 40 mil pedidos importados: o planejador estima 1 linha e escolhe um `Nested Loop` | `Nested Loop` ~960 ms → `Hash Join` ~67 ms, com `ANALYZE` |
 | 06 | [NOT IN com subconsulta](investigacoes/06-not-in-subconsulta/README.md) | O painel de pedidos de hoje sem pagamento leva quase 10 s, mesmo depois de criarem um índice | O `NOT IN` não vira join: a lista de 487 mil pagamentos é percorrida para cada pedido do dia, e o índice não é usado | `SubPlan` ~9,7 s → `Hash Anti Join` ~80 ms, com `NOT EXISTS` |
+| 07 | [Busca por trecho do texto](investigacoes/07-busca-por-trecho/README.md) | A busca pelo final do telefone lê a tabela inteira de clientes, mesmo depois de criarem um índice em `telefone` | `LIKE '%-4217'` tem o curinga no começo, e o índice B-tree só atende buscas pelo começo do texto | `Seq Scan` ~3 ms → `Bitmap Heap Scan` ~0,09 ms, com um índice de trigramas (`pg_trgm`) |
 
 Cada investigação fica numa pasta própria, com:
 
@@ -164,7 +165,7 @@ Zera as estatísticas da `pg_stat_statements`, executa a carga simulada da aplic
 npm run medir
 ```
 
-Mede cada cenário das investigações 01 a 03, 05 e 06 (antes, tentativa e depois: mediana de 5 execuções, ou de 3 nas consultas que passam de 5 s, linhas lidas e buffers) e grava [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), com a data, o sistema, a CPU e a versão do PostgreSQL. Os tempos citados nos relatórios são aproximados. Esse arquivo é o registro padronizado, e para atualizá-lo basta rodar o script de novo.
+Mede cada cenário das investigações 01 a 03 e 05 a 07 (antes, tentativa e depois: mediana de 5 execuções, ou de 3 nas consultas que passam de 5 s, linhas lidas e buffers) e grava [`investigacoes/MEDICOES.md`](investigacoes/MEDICOES.md), com a data, o sistema, a CPU e a versão do PostgreSQL. Os tempos citados nos relatórios são aproximados. Esse arquivo é o registro padronizado, e para atualizá-lo basta rodar o script de novo.
 
 ## Integração contínua
 
@@ -172,7 +173,7 @@ A cada pull request e a cada push na `main`, o GitHub Actions executa:
 
 - **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux. Em seguida, `npm run medir` mostra a tabela de medições no resumo da execução, como referência de uma máquina Linux padronizada. Os tempos não são conferidos.
 - **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale, o `VACUUM` e, para cada tabela, a quantidade de linhas e o `md5`. Depois, executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
-- **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 66 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
+- **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 70 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
 
 Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux, no container e nas outras versões do PostgreSQL. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
 
@@ -192,6 +193,7 @@ Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente
 │   ├── 04-bloqueio-create-index/  # migração, migração corrigida e diagnóstico de bloqueio
 │   ├── 05-estatisticas-desatualizadas/  # relatório, cenário (importação), consulta, exploração e correção
 │   ├── 06-not-in-subconsulta/ # relatório, consulta, tentativa, exploração e consulta reescrita
+│   ├── 07-busca-por-trecho/   # relatório, consulta, tentativa, exploração e correção
 │   └── MEDICOES.md            # tempos medidos (gerado por npm run medir)
 ├── package.json
 ├── scripts/
