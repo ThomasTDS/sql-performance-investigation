@@ -21,6 +21,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 - **Três causas clássicas de lentidão:** chave estrangeira sem índice, índice ignorado por causa de uma função na coluna e paginação com `OFFSET` alto. As correções incluem índice comum, índice de expressão e paginação por chave (*keyset*). Uma quarta investigação trata da busca por trecho do texto (`LIKE '%...'`), com um índice de trigramas (GIN).
 - **Estatísticas desatualizadas:** depois de uma importação, o planejador estima 1 linha onde há 38 mil e escolhe o join errado. A investigação mostra por que o autovacuum não corrigiu sozinho e por que um índice esconderia o problema sem resolvê-lo.
 - **Uma consulta lenta que também pode estar errada:** um `NOT IN` com subconsulta leva quase 10 s e não usa o índice criado para ele. A reescrita com `NOT EXISTS` leva 80 ms, mas só é equivalente porque a coluna não aceita nulos; com nulos, o `NOT IN` devolve zero linhas sem nenhum aviso.
+- **Nem todo chamado é de lentidão:** uma tabela que dobra de tamanho numa noite, sem nenhuma linha nova, por causa de um job que grava linhas que não mudam. A investigação mostra por que o `VACUUM` não devolve o espaço e quanto custa o `VACUUM FULL`.
 - **O risco da própria correção:** uma investigação de bloqueio mostra, com várias sessões simultâneas, por que um `CREATE INDEX` em produção trava as escritas e quais são as armadilhas do `CONCURRENTLY`.
 - **Correções que "não deram certo" também documentadas:** em quatro investigações, o time já tinha criado um índice que não resolveu, e o relatório explica por quê.
 - **Verificação automatizada e determinística:** a CI não confere tempos, que variam de máquina para máquina. Ela confere o formato do plano, a quantidade de linhas lidas e que a correção não muda o resultado da consulta.
@@ -30,7 +31,7 @@ Este repositório investiga problemas de **performance** em consultas SQL num ba
 
 ## Investigações
 
-A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto de partida: com uma carga simulada da aplicação e a extensão `pg_stat_statements`, ela mostra quais consultas mais pesam no banco. As três do topo do ranking são as investigações 01 a 03. A 04 trata do risco de aplicar uma dessas correções em produção, a 05, de um relatório que ficou lento depois de uma importação de dados, a 06, de um painel que depende da forma da consulta, e não de um índice, e a 07, de uma busca por trecho que o índice comum não atende:
+A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto de partida: com uma carga simulada da aplicação e a extensão `pg_stat_statements`, ela mostra quais consultas mais pesam no banco. As três do topo do ranking são as investigações 01 a 03. A 04 trata do risco de aplicar uma dessas correções em produção, a 05, de um relatório que ficou lento depois de uma importação de dados, a 06, de um painel que depende da forma da consulta, e não de um índice, a 07, de uma busca por trecho que o índice comum não atende, e a 08, de uma tabela que dobrou de tamanho:
 
 | # | Investigação | Sintoma | Causa raiz | Antes → depois |
 |---|---|---|---|---|
@@ -41,6 +42,7 @@ A [investigação 00 (triagem)](investigacoes/00-triagem/README.md) é o ponto d
 | 05 | [Estatísticas desatualizadas depois de uma importação](investigacoes/05-estatisticas-desatualizadas/README.md) | O relatório de vendas por equipe de janeiro leva quase 1 s; o de dezembro, ~70 ms | As estatísticas não conhecem os 40 mil pedidos importados: o planejador estima 1 linha e escolhe um `Nested Loop` | `Nested Loop` ~960 ms → `Hash Join` ~67 ms, com `ANALYZE` |
 | 06 | [NOT IN com subconsulta](investigacoes/06-not-in-subconsulta/README.md) | O painel de pedidos de hoje sem pagamento leva quase 10 s, mesmo depois de criarem um índice | O `NOT IN` não vira join: a lista de 487 mil pagamentos é percorrida para cada pedido do dia, e o índice não é usado | `SubPlan` ~9,7 s → `Hash Anti Join` ~80 ms, com `NOT EXISTS` |
 | 07 | [Busca por trecho do texto](investigacoes/07-busca-por-trecho/README.md) | A busca pelo final do telefone lê a tabela inteira de clientes, mesmo depois de criarem um índice em `telefone` | `LIKE '%-4217'` tem o curinga no começo, e o índice B-tree só atende buscas pelo começo do texto | `Seq Scan` ~3 ms → `Bitmap Heap Scan` ~0,09 ms, com um índice de trigramas (`pg_trgm`) |
+| 08 | [Tabela inchada depois de um UPDATE em massa](investigacoes/08-tabela-inchada/README.md) | Alerta de disco: `pedidos` dobrou de tamanho numa noite, sem nenhum pedido novo | O job noturno grava as 500 mil linhas mesmo sem mudar nada, e cada `UPDATE` deixa uma versão antiga para trás; o `VACUUM` não devolve o espaço ao disco | 8.410 → 4.207 páginas (66 → 33 MB), com o job gravando só o que muda e um `VACUUM FULL` |
 
 Cada investigação fica numa pasta própria, com:
 
@@ -63,6 +65,8 @@ Para cada investigação, a validação abre uma transação e:
 Quando o tipo de acesso não basta para diferenciar os cenários (por exemplo, dois `Index Scan` no mesmo índice), a validação também confere quantas linhas da tabela o plano leu. Ao contrário do tempo, esse número é determinístico. Quando a correção muda o join, e não o acesso à tabela, ela confere o tipo do join: `Nested Loop` → `Hash Join` na investigação 05, onde também confere se a estimativa de linhas do planejador está certa ou errada, e subconsulta (`SubPlan`) → `Hash Join` do tipo `Anti` na 06. Os tempos citados nos relatórios são ilustrativos: variam de máquina para máquina e, por isso, não são conferidos.
 
 A investigação 04 (bloqueio) tem um formato próprio: `migracao.sql`, `migracao-corrigida.sql` e um `exploracao.sql` com consultas de diagnóstico para um terminal observador. A validação abre várias conexões e confere o que acontece com as escritas da aplicação enquanto a migração roda (bloqueada ou liberada), além do estado do índice no fim.
+
+A investigação 08 (tabela inchada) também tem um formato próprio: `job.sql`, `job-corrigido.sql` e `manutencao.sql` (o `VACUUM FULL`). Como o `VACUUM` não roda dentro de uma transação, ela não é desfeita com `ROLLBACK`: a validação a executa por último e confere o tamanho de `pedidos` em cada etapa, terminando com a tabela no tamanho original e com o mesmo `md5` dos dados.
 
 ## Modelo de dados
 
@@ -138,7 +142,7 @@ docker compose down -v
 
 ### Reproduzir uma investigação
 
-Com o banco do Docker Compose no ar, cada relatório pode ser refeito passo a passo. O `exploracao.sql` traz as queries na ordem dos passos do relatório e desfaz, no fim, tudo o que criou:
+Com o banco do Docker Compose no ar, cada relatório pode ser refeito passo a passo. O `exploracao.sql` traz as queries na ordem dos passos do relatório e desfaz, no fim, tudo o que criou (na investigação 08, que não pode usar `ROLLBACK`, ele termina com a tabela no tamanho original e com os mesmos dados):
 
 ```bash
 docker compose exec -T postgres psql -U postgres -d performance_investigation < investigacoes/01-fk-sem-indice/exploracao.sql
@@ -173,7 +177,7 @@ A cada pull request e a cada push na `main`, o GitHub Actions executa:
 
 - **Validação (Postgres embarcado):** `npm ci` e `npm run validate`, no Linux. Em seguida, `npm run medir` mostra a tabela de medições no resumo da execução, como referência de uma máquina Linux padronizada. Os tempos não são conferidos.
 - **Docker Compose:** sobe o banco pelo `docker-compose.yml` e confere a codificação, o locale, o `VACUUM` e, para cada tabela, a quantidade de linhas e o `md5`. Depois, executa cada `exploracao.sql` com `psql -v ON_ERROR_STOP=1` e roda o `npm run triagem` no banco do container. Se qualquer query de um relatório falhar, o job falha.
-- **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 70 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
+- **PostgreSQL 17 e 18 (informativo):** a mesma validação, com o PostgreSQL embarcado nas versões 17 e 18, para mostrar o que mudaria num upgrade. Esses dois jobs não bloqueiam o merge. Hoje, as 78 conferências passam nas três versões: os planos, as linhas lidas, o ranking da triagem e o comportamento dos bloqueios são os mesmos.
 
 Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente no Windows. Assim, a CI garante que o volume é idêntico no Linux, no container e nas outras versões do PostgreSQL. O resultado de cada conferência aparece no resumo da execução, na aba **Actions**.
 
@@ -194,6 +198,7 @@ Os jobs comparam os dados com os mesmos valores esperados, gerados originalmente
 │   ├── 05-estatisticas-desatualizadas/  # relatório, cenário (importação), consulta, exploração e correção
 │   ├── 06-not-in-subconsulta/ # relatório, consulta, tentativa, exploração e consulta reescrita
 │   ├── 07-busca-por-trecho/   # relatório, consulta, tentativa, exploração e correção
+│   ├── 08-tabela-inchada/     # relatório, job antigo, job corrigido, manutenção e exploração
 │   └── MEDICOES.md            # tempos medidos (gerado por npm run medir)
 ├── package.json
 ├── scripts/

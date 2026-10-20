@@ -18,7 +18,9 @@
 //    da consulta não mudou. Tempos não são conferidos: variam de máquina
 //    para máquina e deixariam a CI instável. Na investigação de bloqueio
 //    (04), confere com várias conexões o que acontece com as escritas da
-//    aplicação durante a migração (ver verificarBloqueio).
+//    aplicação durante a migração (ver verificarBloqueio). Na de tabela
+//    inchada (08), confere o tamanho de pedidos depois do job, do VACUUM e
+//    do VACUUM FULL, fora de transação e por último (ver verificarInchaco).
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -299,6 +301,57 @@ async function verificarBloqueio(observador) {
     await listar(observador, "SELECT indexname AS nome FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1"));
 }
 
+// Investigação 08 (tabela inchada): não compara planos, e sim o tamanho da
+// tabela pedidos em cada etapa. O VACUUM não roda dentro de uma transação,
+// então esta verificação grava as mudanças de verdade e roda por último. No
+// fim, o VACUUM FULL devolve a tabela ao tamanho do volume base, com os
+// mesmos dados (md5), e um VACUUM comum refaz o mapa de visibilidade.
+// O tamanho é conferido em proporção ao volume base ("cerca do dobro", "o
+// mesmo tamanho", com 1% de folga), e não em páginas exatas, para não
+// depender de detalhes de cada versão: no PostgreSQL 18, o VACUUM FULL
+// deixa a tabela com 4.208 páginas, uma a mais que no 16.
+const INCHACO_PASTA = '08-tabela-inchada';
+// Preenchido na etapa 3, logo depois da carga do volume.
+let PAGINAS_PEDIDOS_BASE;
+
+async function verificarInchaco(client) {
+  const rotulo = (texto) => `${INCHACO_PASTA}: ${texto}`;
+  const paginas = async () => Number((await client.query("SELECT pg_relation_size('pedidos') / 8192 AS p")).rows[0].p);
+  const proporcao = (atual, base) => {
+    const p = atual / base;
+    if (p >= 1.9 && p <= 2.1) return 'cerca do dobro';
+    if (p >= 0.99 && p <= 1.01) return 'o mesmo tamanho';
+    return `${p.toFixed(3)} vezes`;
+  };
+  const md5Pedidos = async () =>
+    (await client.query("SELECT md5(string_agg(t::text, '|' ORDER BY id)) AS md5 FROM pedidos AS t")).rows[0].md5;
+
+  // Preparação: a investigação 05 deixa versões mortas em pedidos (a
+  // importação desfeita com ROLLBACK). O VACUUM as remove e devolve as
+  // páginas vazias do fim do arquivo, e a tabela volta ao tamanho base.
+  await client.query('VACUUM pedidos');
+  const base = await paginas();
+  conferir(rotulo('páginas de pedidos antes do job'), PAGINAS_PEDIDOS_BASE, base);
+
+  const job = await client.query(lerInvestigacao(INCHACO_PASTA, 'job.sql'));
+  conferir(rotulo('job antigo: linhas gravadas'), 500000, job.rowCount);
+  conferir(rotulo('job antigo: tamanho de pedidos'), 'cerca do dobro', proporcao(await paginas(), base));
+
+  await client.query('VACUUM pedidos');
+  conferir(rotulo('depois do VACUUM: tamanho de pedidos'), 'cerca do dobro', proporcao(await paginas(), base));
+
+  await client.query(lerInvestigacao(INCHACO_PASTA, 'job.sql'));
+  conferir(rotulo('job antigo de novo, depois do VACUUM: tamanho de pedidos'), 'cerca do dobro', proporcao(await paginas(), base));
+
+  const jobCorrigido = await client.query(lerInvestigacao(INCHACO_PASTA, 'job-corrigido.sql'));
+  conferir(rotulo('job corrigido: linhas gravadas'), 0, jobCorrigido.rowCount);
+
+  await client.query(lerInvestigacao(INCHACO_PASTA, 'manutencao.sql'));
+  conferir(rotulo('depois do VACUUM FULL: tamanho de pedidos'), 'o mesmo tamanho', proporcao(await paginas(), base));
+  conferir(rotulo('depois do VACUUM FULL: dados de pedidos (md5)'), VOLUME_ESPERADO.pedidos.md5, await md5Pedidos());
+  await client.query('VACUUM pedidos');
+}
+
 async function main() {
   await comPostgresEmbarcado({
     porta: PORT,
@@ -348,6 +401,8 @@ async function main() {
       WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relallvisible < relpages`);
     conferir('tabelas com páginas fora do mapa de visibilidade (VACUUM)', '(nenhuma)',
       naoVisiveis.rows[0].tabelas || '(nenhuma)');
+    // Tamanho de pedidos logo depois da carga, a base da investigação 08.
+    PAGINAS_PEDIDOS_BASE = Number((await client.query("SELECT pg_relation_size('pedidos') / 8192 AS p")).rows[0].p);
     for (const [tabela, esperado] of Object.entries(VOLUME_ESPERADO)) {
       const r = await client.query(
         `SELECT count(*) AS linhas, md5(string_agg(t::text, '|' ORDER BY id)) AS md5 FROM ${tabela} AS t`,
@@ -417,6 +472,7 @@ async function main() {
     }
 
     await verificarBloqueio(client);
+    await verificarInchaco(client);
   });
 
   escreverResumoCi();
