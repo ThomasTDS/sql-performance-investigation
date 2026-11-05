@@ -4,7 +4,7 @@
 ![license](https://img.shields.io/badge/license-MIT-blue.svg)
 ![postgres](https://img.shields.io/badge/PostgreSQL-16-blue.svg)
 
-[Português](README.md) | **English**
+[Português](README.md) | **English** | [Español](README.es.md)
 
 ## Description
 
